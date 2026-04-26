@@ -1,0 +1,2 @@
+-- No-op migration kept so existing migration history remains ordered.
+-- The PostgreSQL baseline schema is created in 20260426103500_init.

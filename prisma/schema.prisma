@@ -1,0 +1,60 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Category {
+  id           String        @id @default(cuid())
+  userId       String
+  name         String
+  type         String
+  transactions Transaction[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@unique([id, userId])
+  @@unique([userId, name, type])
+  @@index([userId, type])
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  userId      String
+  amount      Float
+  type        String
+  date        DateTime
+  description String?
+  categoryId  String
+  category    Category @relation(fields: [categoryId, userId], references: [id, userId], onDelete: Restrict)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, date])
+  @@index([userId, type])
+  @@index([categoryId])
+}
+
+model Loan {
+  id              String   @id @default(cuid())
+  userId          String
+  title           String
+  lender          String?
+  initialAmount   Float
+  remainingAmount Float
+  monthlyPayment  Float
+  interestRate    Float
+  paymentDate     DateTime
+  priority        String   @default("MEDIUM")
+  status          String   @default("ACTIVE")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([userId, priority])
+  @@index([userId, paymentDate])
+}
