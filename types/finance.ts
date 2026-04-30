@@ -1,6 +1,7 @@
 export type TransactionKind = "INCOME" | "EXPENSE";
 export type LoanState = "ACTIVE" | "PAUSED" | "CLOSED";
 export type DebtPriority = "HIGH" | "MEDIUM" | "LOW";
+export type DebtType = "BANK_LOAN" | "CREDIT_CARD" | "PERSONAL_DEBT";
 
 export type Category = {
   id: string;
@@ -30,15 +31,33 @@ export type Transaction = {
 export type Loan = {
   id: string;
   userId?: string;
+  debtType: DebtType;
   title: string;
   lender: string | null;
-  initialAmount: number;
+  initialAmount: number | null;
   remainingAmount: number;
-  monthlyPayment: number;
-  interestRate: number;
-  paymentDate: string;
+  monthlyPayment: number | null;
+  plannedPayment: number | null;
+  minimalPayment: number | null;
+  creditLimit: number | null;
+  interestRate: number | null;
+  paymentDate: string | null;
   priority: DebtPriority;
   status: LoanState;
+  payments?: LoanPayment[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type LoanPayment = {
+  id: string;
+  userId?: string;
+  loanId: string;
+  amount: number;
+  appliedAmount: number | null;
+  date: string;
+  description: string | null;
+  transactionId: string | null;
   createdAt?: string;
   updatedAt?: string;
 };

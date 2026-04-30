@@ -12,6 +12,11 @@ const loanStatusSchema = z.enum(["ACTIVE", "PAUSED", "CLOSED"], {
   invalid_type_error: "Некорректный статус кредита"
 });
 
+const debtTypeSchema = z.enum(["BANK_LOAN", "CREDIT_CARD", "PERSONAL_DEBT"], {
+  required_error: "Укажите тип долга",
+  invalid_type_error: "Некорректный тип долга"
+});
+
 const debtPrioritySchema = z.enum(["HIGH", "MEDIUM", "LOW"], {
   required_error: "Укажите приоритет",
   invalid_type_error: "Некорректный приоритет"
@@ -48,6 +53,26 @@ function nonnegativeMoneySchema(message: string) {
   return moneySchema(message).refine((value) => value >= 0, message);
 }
 
+function optionalPositiveMoneySchema(message: string) {
+  return z.preprocess((value) => {
+    if (value === "" || value === null || value === undefined) {
+      return null;
+    }
+
+    return normalizeMoney(value);
+  }, z.number({ invalid_type_error: message }).finite("Укажите корректное число").positive(message).nullable());
+}
+
+function optionalNonnegativeMoneySchema(message: string) {
+  return z.preprocess((value) => {
+    if (value === "" || value === null || value === undefined) {
+      return null;
+    }
+
+    return normalizeMoney(value);
+  }, z.number({ invalid_type_error: message }).finite("Укажите корректное число").min(0, message).nullable());
+}
+
 const dateSchema = z.preprocess(
   parseDateInput,
   z.date({
@@ -55,6 +80,14 @@ const dateSchema = z.preprocess(
     invalid_type_error: "Некорректная дата"
   })
 );
+
+const optionalDateSchema = z.preprocess((value) => {
+  if (value === "" || value === null || value === undefined) {
+    return null;
+  }
+
+  return parseDateInput(value);
+}, z.date({ invalid_type_error: "Некорректная дата" }).nullable());
 
 export const categorySchema = z.object({
   name: z
@@ -81,6 +114,7 @@ export const transactionSchema = z.object({
 
 export const loanSchema = z
   .object({
+    debtType: debtTypeSchema.default("BANK_LOAN"),
     title: z
       .string({ required_error: "Укажите название кредита" })
       .trim()
@@ -97,34 +131,63 @@ export const loanSchema = z
           .optional()
       )
       .transform((value) => value?.replace(/\s+/g, " ") || null),
-    initialAmount: positiveMoneySchema("Изначальная сумма должна быть больше нуля"),
+    initialAmount: optionalPositiveMoneySchema("Общая сумма должна быть больше нуля"),
     remainingAmount: nonnegativeMoneySchema("Остаток не может быть отрицательным"),
-    monthlyPayment: nonnegativeMoneySchema("Платеж не может быть отрицательным"),
-    interestRate: nonnegativeMoneySchema("Процент не может быть отрицательным").refine(
-      (value) => value <= 100,
+    monthlyPayment: optionalNonnegativeMoneySchema("Платеж не может быть отрицательным"),
+    plannedPayment: optionalNonnegativeMoneySchema("Платеж не может быть отрицательным"),
+    minimalPayment: optionalNonnegativeMoneySchema("Платеж не может быть отрицательным"),
+    creditLimit: optionalPositiveMoneySchema("Лимит должен быть больше нуля"),
+    interestRate: optionalNonnegativeMoneySchema("Процент не может быть отрицательным").refine(
+      (value) => value === null || value <= 100,
       "Процент не должен быть больше 100"
     ),
-    paymentDate: dateSchema,
+    paymentDate: optionalDateSchema,
     priority: debtPrioritySchema.default("MEDIUM"),
     status: loanStatusSchema
   })
   .superRefine((value, context) => {
-    if (value.remainingAmount > value.initialAmount) {
+    if (
+      value.debtType !== "CREDIT_CARD" &&
+      (!Number.isFinite(value.initialAmount) || !value.initialAmount)
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ["remainingAmount"],
-        message: "Остаток не может быть больше изначальной суммы"
+        path: ["initialAmount"],
+        message: "Укажите общую сумму долга"
       });
     }
 
-    if (value.status === "ACTIVE" && value.monthlyPayment <= 0) {
+    if (
+      value.initialAmount &&
+      value.remainingAmount > value.initialAmount &&
+      value.debtType !== "CREDIT_CARD"
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ["monthlyPayment"],
-        message: "Для активного кредита укажите ежемесячный платеж"
+        path: ["remainingAmount"],
+        message: "Остаток не может быть больше общей суммы"
+      });
+    }
+
+    if (value.creditLimit && value.remainingAmount > value.creditLimit) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["remainingAmount"],
+        message: "Долг по карте не может быть больше кредитного лимита"
       });
     }
   });
+
+export const loanPaymentSchema = z.object({
+  amount: positiveMoneySchema("Сумма платежа должна быть больше нуля"),
+  date: dateSchema,
+  description: z
+    .string()
+    .trim()
+    .max(180, "Описание должно быть короче 180 символов")
+    .optional()
+    .transform((value) => value || null)
+});
 
 export const backupImportSchema = z.object({
   categories: z.array(
@@ -148,19 +211,36 @@ export const backupImportSchema = z.object({
     z.object({
       id: z.string().optional(),
       title: z.string().trim().min(2),
+      debtType: debtTypeSchema.default("BANK_LOAN"),
       lender: z.string().trim().nullable().optional(),
-      initialAmount: positiveMoneySchema("Изначальная сумма должна быть больше нуля"),
+      initialAmount: optionalPositiveMoneySchema("Общая сумма должна быть больше нуля"),
       remainingAmount: nonnegativeMoneySchema("Остаток не может быть отрицательным"),
-      monthlyPayment: nonnegativeMoneySchema("Платеж не может быть отрицательным"),
-      interestRate: nonnegativeMoneySchema("Процент не может быть отрицательным").refine(
-        (value) => value <= 100,
+      monthlyPayment: optionalNonnegativeMoneySchema("Платеж не может быть отрицательным"),
+      plannedPayment: optionalNonnegativeMoneySchema("Платеж не может быть отрицательным").optional(),
+      minimalPayment: optionalNonnegativeMoneySchema("Платеж не может быть отрицательным").optional(),
+      creditLimit: optionalPositiveMoneySchema("Лимит должен быть больше нуля").optional(),
+      interestRate: optionalNonnegativeMoneySchema("Процент не может быть отрицательным").refine(
+        (value) => value === null || value <= 100,
         "Процент не должен быть больше 100"
       ),
-      paymentDate: dateSchema,
+      paymentDate: optionalDateSchema,
       priority: debtPrioritySchema.default("MEDIUM"),
       status: loanStatusSchema
     })
-  )
+  ),
+  loanPayments: z
+    .array(
+      z.object({
+        id: z.string().optional(),
+        loanId: z.string(),
+        amount: positiveMoneySchema("Сумма платежа должна быть больше нуля"),
+        appliedAmount: optionalNonnegativeMoneySchema("Сумма погашения не может быть отрицательной").optional(),
+        date: dateSchema,
+        description: z.string().nullable().optional(),
+        transactionId: z.string().nullable().optional()
+      })
+    )
+    .optional()
 });
 
 export function firstZodError(error: z.ZodError) {

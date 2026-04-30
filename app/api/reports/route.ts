@@ -1,12 +1,10 @@
 import { NextResponse } from "next/server";
 
 import {
-  endOfMonth,
-  endOfYear,
+  dateRangeFromSearch,
   monthKey,
   monthLabel,
-  startOfMonth,
-  startOfYear
+  startOfMonth
 } from "@/lib/date-ranges";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import {
@@ -16,6 +14,8 @@ import {
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
+
+const dayMs = 24 * 60 * 60 * 1000;
 
 type ReportTransaction = Awaited<
   ReturnType<typeof prisma.transaction.findMany>
@@ -67,32 +67,38 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const threshold = parseLeakageThreshold(url.searchParams.get("leakageThreshold"));
   const now = new Date();
-  const yearStart = startOfYear(now);
-  const yearEnd = endOfYear(now);
-  const monthStart = new Date(now.getFullYear(), now.getMonth() - 11, 1);
-  const currentMonthStart = startOfMonth(now);
-  const currentMonthEnd = endOfMonth(now);
-  const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const previousMonthEnd = currentMonthStart;
+  const range = dateRangeFromSearch(url.searchParams);
+  const periodStart = range.from ?? startOfMonth(now);
+  const periodEnd = range.to ?? new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const periodDuration = Math.max(dayMs, periodEnd.getTime() - periodStart.getTime());
+  const previousPeriodStart = new Date(periodStart.getTime() - periodDuration);
+  const previousPeriodEnd = periodStart;
 
   const allTransactions = await prisma.transaction.findMany({
-    where: { userId: auth.userId },
+    where: {
+      userId: auth.userId,
+      date: {
+        gte: previousPeriodStart,
+        lt: periodEnd
+      }
+    },
     include: { category: true },
     orderBy: [{ date: "desc" }, { createdAt: "desc" }]
   });
   const loans = await prisma.loan.findMany({
     where: { userId: auth.userId, status: { not: "CLOSED" } }
   });
-  const control = buildFinancialControlData(allTransactions, loans, threshold, now);
-  const yearTransactions = allTransactions.filter(
-    (transaction) => transaction.date >= yearStart && transaction.date < yearEnd
+  const periodTransactions = allTransactions.filter(
+    (transaction) => transaction.date >= periodStart && transaction.date < periodEnd
   );
-  const monthlyTransactions = allTransactions.filter(
-    (transaction) => transaction.date >= monthStart
+  const previousPeriodTransactions = allTransactions.filter(
+    (transaction) =>
+      transaction.date >= previousPeriodStart && transaction.date < previousPeriodEnd
   );
+  const control = buildFinancialControlData(periodTransactions, loans, threshold, now);
 
-  const byExpenseCategory = buildCategoryBreakdown(yearTransactions, "EXPENSE");
-  const byIncomeCategory = buildCategoryBreakdown(yearTransactions, "INCOME");
+  const byExpenseCategory = buildCategoryBreakdown(periodTransactions, "EXPENSE");
+  const byIncomeCategory = buildCategoryBreakdown(periodTransactions, "INCOME");
 
   const months = new Map<
     string,
@@ -104,8 +110,15 @@ export async function GET(request: Request) {
     }
   >();
 
-  for (let index = 11; index >= 0; index -= 1) {
-    const date = new Date(now.getFullYear(), now.getMonth() - index, 1);
+  const firstMonth = startOfMonth(periodStart);
+  const lastMonthDate = new Date(periodEnd.getTime() - 1);
+  const lastMonth = startOfMonth(lastMonthDate);
+
+  for (
+    let date = firstMonth;
+    date <= lastMonth;
+    date = new Date(date.getFullYear(), date.getMonth() + 1, 1)
+  ) {
     const key = monthKey(date);
     months.set(key, {
       month: key,
@@ -115,7 +128,7 @@ export async function GET(request: Request) {
     });
   }
 
-  for (const transaction of monthlyTransactions) {
+  for (const transaction of periodTransactions) {
     const key = monthKey(transaction.date);
     const bucket = months.get(key);
 
@@ -130,33 +143,27 @@ export async function GET(request: Request) {
     }
   }
 
-  const totalIncome = yearTransactions
+  const totalIncome = periodTransactions
     .filter((transaction) => transaction.type === "INCOME")
     .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const totalExpense = yearTransactions
+  const totalExpense = periodTransactions
     .filter((transaction) => transaction.type === "EXPENSE")
     .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const currentMonthTransactions = allTransactions.filter(
-    (transaction) => transaction.date >= currentMonthStart && transaction.date < currentMonthEnd
-  );
-  const previousMonthTransactions = allTransactions.filter(
-    (transaction) => transaction.date >= previousMonthStart && transaction.date < previousMonthEnd
-  );
   const currentMonth = {
-    income: currentMonthTransactions
+    income: periodTransactions
       .filter((transaction) => transaction.type === "INCOME")
       .reduce((sum, transaction) => sum + transaction.amount, 0),
-    expense: currentMonthTransactions
+    expense: periodTransactions
       .filter((transaction) => transaction.type === "EXPENSE")
       .reduce((sum, transaction) => sum + transaction.amount, 0),
     balance: 0
   };
   currentMonth.balance = currentMonth.income - currentMonth.expense;
   const previousMonth = {
-    income: previousMonthTransactions
+    income: previousPeriodTransactions
       .filter((transaction) => transaction.type === "INCOME")
       .reduce((sum, transaction) => sum + transaction.amount, 0),
-    expense: previousMonthTransactions
+    expense: previousPeriodTransactions
       .filter((transaction) => transaction.type === "EXPENSE")
       .reduce((sum, transaction) => sum + transaction.amount, 0),
     balance: 0

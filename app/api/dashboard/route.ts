@@ -1,18 +1,21 @@
 import { NextResponse } from "next/server";
 
 import { isAuthError, requireAuth } from "@/lib/auth";
+import { dateRangeFromSearch } from "@/lib/date-ranges";
 import { getFinancialControlData } from "@/lib/financial-control";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
   const auth = await requireAuth();
 
   if (isAuthError(auth)) {
     return auth;
   }
 
-  const control = await getFinancialControlData(auth.userId);
+  const url = new URL(request.url);
+  const range = dateRangeFromSearch(url.searchParams);
+  const control = await getFinancialControlData(auth.userId, 1000, range);
 
   return NextResponse.json({
     totalIncome: control.totalIncome,

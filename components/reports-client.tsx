@@ -21,9 +21,11 @@ import {
 import { EmptyState } from "@/components/empty-state";
 import { Notice } from "@/components/notice";
 import { PageHeader } from "@/components/page-header";
+import { PeriodFilter } from "@/components/period-filter";
 import { StatCard } from "@/components/stat-card";
-import { readErrorMessage } from "@/lib/client-api";
+import { buildQuery, readErrorMessage } from "@/lib/client-api";
 import { formatCurrency, formatPercent } from "@/lib/format";
+import { buildPeriodQuery, createPeriodState, describePeriod } from "@/lib/period";
 import { parseSettings, storageKey } from "@/lib/settings";
 import type { CategoryBreakdownItem, ReportsResponse } from "@/types/finance";
 
@@ -67,7 +69,7 @@ function CategoryBreakdownCard({
     <section className="card p-4 sm:p-5">
       <div className="mb-4">
         <h2 className="text-lg font-semibold text-ink">{title}</h2>
-        <p className="mt-1 text-sm text-muted">Текущий год</p>
+        <p className="mt-1 text-sm text-muted">Выбранный период</p>
       </div>
 
       {items.length === 0 ? (
@@ -130,6 +132,7 @@ function CategoryBreakdownCard({
 
 export function ReportsClient() {
   const [reports, setReports] = useState<ReportsResponse | null>(null);
+  const [period, setPeriod] = useState(() => createPeriodState("month"));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -141,9 +144,11 @@ export function ReportsClient() {
       try {
         const settings = parseSettings(window.localStorage.getItem(storageKey));
         const threshold = Number(settings.leakageThreshold) || 1000;
-        const response = await fetch(`/api/reports?leakageThreshold=${threshold}`, {
-          cache: "no-store"
+        const query = buildQuery({
+          leakageThreshold: String(threshold),
+          ...buildPeriodQuery(period)
         });
+        const response = await fetch(`/api/reports${query}`, { cache: "no-store" });
 
         if (!response.ok) {
           throw new Error(await readErrorMessage(response));
@@ -158,7 +163,7 @@ export function ReportsClient() {
     }
 
     loadReports();
-  }, []);
+  }, [period]);
 
   const hasMonthlyData = useMemo(() => {
     if (!reports) {
@@ -172,8 +177,10 @@ export function ReportsClient() {
     <div>
       <PageHeader
         title="Отчеты"
-        description="Структура расходов, динамика по месяцам и сравнение доходов с расходами."
+        description={`Структура расходов и доходов за период: ${describePeriod(period)}.`}
       />
+
+      <PeriodFilter value={period} onChange={setPeriod} />
 
       <Notice message={error} tone="error" />
 
@@ -191,19 +198,19 @@ export function ReportsClient() {
         <div className="space-y-6">
           <div className="grid gap-4 sm:grid-cols-3">
             <StatCard
-              label="Доходы за год"
+              label="Доходы за период"
               value={formatCurrency(reports.comparison.totalIncome)}
               icon={ArrowUpCircle}
               tone="income"
             />
             <StatCard
-              label="Расходы за год"
+              label="Расходы за период"
               value={formatCurrency(reports.comparison.totalExpense)}
               icon={ArrowDownCircle}
               tone="expense"
             />
             <StatCard
-              label="Разница за год"
+              label="Разница за период"
               value={formatCurrency(reports.comparison.balance)}
               icon={Scale}
               tone={reports.comparison.balance >= 0 ? "income" : "expense"}
@@ -212,7 +219,7 @@ export function ReportsClient() {
 
           <div className="grid gap-4 xl:grid-cols-3">
             <section className="card p-4 sm:p-5">
-              <h2 className="text-lg font-semibold text-ink">Этот месяц</h2>
+              <h2 className="text-lg font-semibold text-ink">Выбранный период</h2>
               <div className="mt-4 space-y-3 text-sm">
                 <div className="flex justify-between gap-3">
                   <span className="text-muted">Доходы</span>
@@ -236,7 +243,7 @@ export function ReportsClient() {
             </section>
 
             <section className="card p-4 sm:p-5">
-              <h2 className="text-lg font-semibold text-ink">К прошлому месяцу</h2>
+              <h2 className="text-lg font-semibold text-ink">К предыдущему периоду</h2>
               <div className="mt-4 space-y-3 text-sm">
                 <div className="flex justify-between gap-3">
                   <span className="text-muted">Доходы</span>

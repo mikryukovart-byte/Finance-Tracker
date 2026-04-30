@@ -18,7 +18,8 @@ export const defaultSystemCategories: DefaultCategory[] = [
   { name: "Здоровье", type: "EXPENSE" },
   { name: "Развлечения", type: "EXPENSE" },
   { name: "Связь", type: "EXPENSE" },
-  { name: "Покупки", type: "EXPENSE" }
+  { name: "Покупки", type: "EXPENSE" },
+  { name: "Долги", type: "EXPENSE" }
 ];
 
 export async function ensureDefaultCategories(userId: string) {

@@ -14,7 +14,7 @@ export async function GET() {
     return auth;
   }
 
-  const [categories, transactions, loans] = await Promise.all([
+  const [categories, transactions, loans, loanPayments] = await Promise.all([
     prisma.category.findMany({
       where: { userId: auth.userId },
       orderBy: [{ type: "asc" }, { name: "asc" }]
@@ -26,7 +26,16 @@ export async function GET() {
     }),
     prisma.loan.findMany({
       where: { userId: auth.userId },
+      include: {
+        payments: {
+          orderBy: [{ date: "desc" }, { createdAt: "desc" }]
+        }
+      },
       orderBy: [{ status: "asc" }, { paymentDate: "asc" }]
+    }),
+    prisma.loanPayment.findMany({
+      where: { userId: auth.userId },
+      orderBy: [{ date: "desc" }, { createdAt: "desc" }]
     })
   ]);
 
@@ -35,7 +44,8 @@ export async function GET() {
     exportedAt: new Date().toISOString(),
     categories,
     transactions,
-    loans
+    loans,
+    loanPayments
   });
 }
 
@@ -59,11 +69,14 @@ export async function POST(request: Request) {
   }
 
   const categoryIdMap = new Map<string, string>();
+  const loanIdMap = new Map<string, string>();
+  const transactionIdMap = new Map<string, string>();
 
   const result = await prisma.$transaction(async (tx) => {
     let importedCategories = 0;
     let importedTransactions = 0;
     let importedLoans = 0;
+    let importedLoanPayments = 0;
 
     for (const category of parsed.data.categories) {
       const normalizedName = category.name.trim().replace(/\s+/g, " ");
@@ -109,11 +122,18 @@ export async function POST(request: Request) {
 
     for (const loan of parsed.data.loans) {
       const data = {
+        debtType: loan.debtType,
         title: loan.title.trim().replace(/\s+/g, " "),
         lender: loan.lender?.trim().replace(/\s+/g, " ") || null,
-        initialAmount: loan.initialAmount,
-        remainingAmount: Math.min(loan.remainingAmount, loan.initialAmount),
+        initialAmount: loan.initialAmount ?? null,
+        remainingAmount:
+          loan.initialAmount && loan.debtType !== "CREDIT_CARD"
+            ? Math.min(loan.remainingAmount, loan.initialAmount)
+            : loan.remainingAmount,
         monthlyPayment: loan.monthlyPayment,
+        plannedPayment: loan.plannedPayment ?? loan.monthlyPayment ?? null,
+        minimalPayment: loan.minimalPayment ?? null,
+        creditLimit: loan.creditLimit ?? null,
         interestRate: loan.interestRate,
         paymentDate: loan.paymentDate,
         priority: loan.priority,
@@ -124,13 +144,15 @@ export async function POST(request: Request) {
         ? await tx.loan.findFirst({ where: { id: loan.id, userId: auth.userId } })
         : null;
 
-      if (existingLoan) {
-        await tx.loan.update({
+      const savedLoan = existingLoan
+        ? await tx.loan.update({
           where: { id: existingLoan.id },
           data
-        });
-      } else {
-        await tx.loan.create({ data: { ...data, userId: auth.userId } });
+        })
+        : await tx.loan.create({ data: { ...data, userId: auth.userId } });
+
+      if (loan.id) {
+        loanIdMap.set(loan.id, savedLoan.id);
       }
 
       importedLoans += 1;
@@ -165,22 +187,69 @@ export async function POST(request: Request) {
           })
         : null;
 
-      if (existingTransaction) {
-        await tx.transaction.update({
+      const savedTransaction = existingTransaction
+        ? await tx.transaction.update({
           where: { id: existingTransaction.id },
           data
-        });
-      } else {
-        await tx.transaction.create({ data: { ...data, userId: auth.userId } });
+        })
+        : await tx.transaction.create({ data: { ...data, userId: auth.userId } });
+
+      if (transaction.id) {
+        transactionIdMap.set(transaction.id, savedTransaction.id);
       }
 
       importedTransactions += 1;
     }
 
+    for (const payment of parsed.data.loanPayments ?? []) {
+      const loanId = loanIdMap.get(payment.loanId) ?? payment.loanId;
+      const loan = await tx.loan.findFirst({
+        where: { id: loanId, userId: auth.userId }
+      });
+
+      if (!loan) {
+        continue;
+      }
+
+      const transactionId = payment.transactionId
+        ? transactionIdMap.get(payment.transactionId) ?? payment.transactionId
+        : null;
+      const transaction = transactionId
+        ? await tx.transaction.findFirst({
+            where: { id: transactionId, userId: auth.userId }
+          })
+        : null;
+      const data = {
+        loanId: loan.id,
+        amount: payment.amount,
+        appliedAmount: payment.appliedAmount ?? payment.amount,
+        date: payment.date,
+        description: payment.description?.trim() || null,
+        transactionId: transaction?.id ?? null
+      };
+      const existingPayment = payment.id
+        ? await tx.loanPayment.findFirst({
+            where: { id: payment.id, userId: auth.userId }
+          })
+        : null;
+
+      if (existingPayment) {
+        await tx.loanPayment.update({
+          where: { id: existingPayment.id },
+          data
+        });
+      } else {
+        await tx.loanPayment.create({ data: { ...data, userId: auth.userId } });
+      }
+
+      importedLoanPayments += 1;
+    }
+
     return {
       categories: importedCategories,
       transactions: importedTransactions,
-      loans: importedLoans
+      loans: importedLoans,
+      loanPayments: importedLoanPayments
     };
   });
 

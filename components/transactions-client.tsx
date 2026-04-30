@@ -17,6 +17,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { EmptyState } from "@/components/empty-state";
 import { FieldError, Notice } from "@/components/notice";
 import { PageHeader } from "@/components/page-header";
+import { PeriodFilter } from "@/components/period-filter";
 import { QuickTransactionInput } from "@/components/quick-transaction-input";
 import { StatCard } from "@/components/stat-card";
 import {
@@ -26,6 +27,7 @@ import {
   readErrorMessage
 } from "@/lib/client-api";
 import { formatCurrency, formatDate, toDateInputValue, typeLabels } from "@/lib/format";
+import { buildPeriodQuery, createPeriodState, describePeriod } from "@/lib/period";
 import type { Category, Transaction, TransactionKind } from "@/types/finance";
 
 type TransactionForm = {
@@ -94,6 +96,7 @@ export function TransactionsClient() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [form, setForm] = useState<TransactionForm>(() => createInitialForm());
   const [filters, setFilters] = useState<TransactionFilters>(defaultFilters);
+  const [period, setPeriod] = useState(() => createPeriodState("month"));
   const [errors, setErrors] = useState<FormErrors>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -137,8 +140,7 @@ export function TransactionsClient() {
       const query = buildQuery({
         type: filters.type === "ALL" ? "" : filters.type,
         categoryId: filters.categoryId,
-        dateFrom: filters.dateFrom,
-        dateTo: filters.dateTo,
+        ...buildPeriodQuery(period),
         sortBy: filters.sortBy,
         sortDir: filters.sortDir
       });
@@ -155,7 +157,7 @@ export function TransactionsClient() {
     } finally {
       setLoading(false);
     }
-  }, [filters]);
+  }, [filters, period]);
 
   useEffect(() => {
     async function loadCategories() {
@@ -315,12 +317,14 @@ export function TransactionsClient() {
     <div>
       <PageHeader
         title="Операции"
-        description="Быстрое добавление, фильтры и аккуратная история движения денег."
+        description={`Быстрое добавление, фильтры и история за период: ${describePeriod(period)}.`}
       />
 
       <div className="mb-6">
         <QuickTransactionInput title="Строка быстрого ввода" onAdded={loadTransactions} />
       </div>
+
+      <PeriodFilter value={period} onChange={setPeriod} />
 
       <div className="mb-6 grid gap-4 md:grid-cols-3">
         <StatCard
@@ -493,7 +497,7 @@ export function TransactionsClient() {
 
         <section className="min-w-0 space-y-4">
           <div className="card p-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <div>
                 <label className="field-label" htmlFor="filterType">
                   Тип
@@ -538,36 +542,6 @@ export function TransactionsClient() {
                     </option>
                   ))}
                 </select>
-              </div>
-
-              <div>
-                <label className="field-label" htmlFor="dateFrom">
-                  С даты
-                </label>
-                <input
-                  id="dateFrom"
-                  className="field mt-1"
-                  type="date"
-                  value={filters.dateFrom}
-                  onChange={(event) =>
-                    setFilters((current) => ({ ...current, dateFrom: event.target.value }))
-                  }
-                />
-              </div>
-
-              <div>
-                <label className="field-label" htmlFor="dateTo">
-                  По дату
-                </label>
-                <input
-                  id="dateTo"
-                  className="field mt-1"
-                  type="date"
-                  value={filters.dateTo}
-                  onChange={(event) =>
-                    setFilters((current) => ({ ...current, dateTo: event.target.value }))
-                  }
-                />
               </div>
 
               <div>
@@ -616,7 +590,10 @@ export function TransactionsClient() {
               <button
                 type="button"
                 className="btn-secondary"
-                onClick={() => setFilters(defaultFilters)}
+                onClick={() => {
+                  setFilters(defaultFilters);
+                  setPeriod(createPeriodState("month"));
+                }}
               >
                 <FilterX className="h-4 w-4" aria-hidden="true" />
                 Сбросить фильтры

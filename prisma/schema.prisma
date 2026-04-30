@@ -31,6 +31,7 @@ model Transaction {
   description String?
   categoryId  String
   category    Category @relation(fields: [categoryId, userId], references: [id, userId], onDelete: Restrict)
+  loanPayments LoanPayment[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -42,19 +43,44 @@ model Transaction {
 model Loan {
   id              String   @id @default(cuid())
   userId          String
+  debtType        String   @default("BANK_LOAN")
   title           String
   lender          String?
-  initialAmount   Float
+  initialAmount   Float?
   remainingAmount Float
-  monthlyPayment  Float
-  interestRate    Float
-  paymentDate     DateTime
+  monthlyPayment  Float?
+  plannedPayment  Float?
+  minimalPayment  Float?
+  creditLimit     Float?
+  interestRate    Float?
+  paymentDate     DateTime?
   priority        String   @default("MEDIUM")
   status          String   @default("ACTIVE")
+  payments        LoanPayment[]
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   @@index([userId, status])
+  @@index([userId, debtType])
   @@index([userId, priority])
   @@index([userId, paymentDate])
+}
+
+model LoanPayment {
+  id            String       @id @default(cuid())
+  userId        String
+  loanId        String
+  loan          Loan         @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  amount        Float
+  appliedAmount Float?
+  date          DateTime
+  description   String?
+  transactionId String?      @unique
+  transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([userId, date])
+  @@index([userId, loanId])
+  @@index([loanId, date])
 }

@@ -13,14 +13,17 @@ import { useEffect, useState } from "react";
 import { EmptyState } from "@/components/empty-state";
 import { Notice } from "@/components/notice";
 import { PageHeader } from "@/components/page-header";
+import { PeriodFilter } from "@/components/period-filter";
 import { StatCard } from "@/components/stat-card";
-import { readErrorMessage } from "@/lib/client-api";
+import { buildQuery, readErrorMessage } from "@/lib/client-api";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
+import { buildPeriodQuery, createPeriodState, describePeriod } from "@/lib/period";
 import { parseSettings, storageKey } from "@/lib/settings";
 import type { TruthResponse } from "@/types/finance";
 
 export function TruthClient() {
   const [data, setData] = useState<TruthResponse | null>(null);
+  const [period, setPeriod] = useState(() => createPeriodState("month"));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -32,9 +35,11 @@ export function TruthClient() {
       try {
         const settings = parseSettings(window.localStorage.getItem(storageKey));
         const threshold = Number(settings.leakageThreshold) || 1000;
-        const response = await fetch(`/api/truth?leakageThreshold=${threshold}`, {
-          cache: "no-store"
+        const query = buildQuery({
+          leakageThreshold: String(threshold),
+          ...buildPeriodQuery(period)
         });
+        const response = await fetch(`/api/truth${query}`, { cache: "no-store" });
 
         if (!response.ok) {
           throw new Error(await readErrorMessage(response));
@@ -49,11 +54,16 @@ export function TruthClient() {
     }
 
     loadTruth();
-  }, []);
+  }, [period]);
 
   return (
     <div>
-      <PageHeader title="Правда" description="Контроль денег, долгов и утечек." />
+      <PageHeader
+        title="Правда"
+        description={`Контроль денег, долгов и утечек за период: ${describePeriod(period)}.`}
+      />
+
+      <PeriodFilter value={period} onChange={setPeriod} />
 
       <Notice message={error} tone="error" />
 
@@ -76,13 +86,13 @@ export function TruthClient() {
               tone={data.balance >= 0 ? "income" : "expense"}
             />
             <StatCard
-              label="Доход за месяц"
+              label="Доход за период"
               value={formatCurrency(data.monthlyIncome)}
               icon={CircleDollarSign}
               tone="income"
             />
             <StatCard
-              label="Расходы за месяц"
+              label="Расходы за период"
               value={formatCurrency(data.monthlyExpense)}
               icon={CalendarDays}
               tone="expense"
@@ -130,7 +140,7 @@ export function TruthClient() {
                   </div>
                 </div>
                 <div>
-                  <div className="text-muted">Расходы месяца</div>
+                  <div className="text-muted">Расходы периода</div>
                   <div className="mt-1 font-medium text-ink">
                     {formatCurrency(data.dailyControl.monthSpending)}
                   </div>

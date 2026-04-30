@@ -1,11 +1,8 @@
 import {
   endOfDay,
-  endOfMonth,
-  endOfYear,
-  startOfDay,
-  startOfMonth,
-  startOfYear
+  startOfDay
 } from "@/lib/date-ranges";
+import { getDebtSummary } from "@/lib/debts";
 import { prisma } from "@/lib/prisma";
 
 const dayMs = 24 * 60 * 60 * 1000;
@@ -30,10 +27,17 @@ type TransactionWithCategory = {
 };
 
 type LoanForControl = {
-  initialAmount: number;
+  initialAmount: number | null;
   remainingAmount: number;
-  monthlyPayment: number;
+  monthlyPayment: number | null;
+  plannedPayment?: number | null;
+  minimalPayment?: number | null;
   status: string;
+};
+
+type FinancialRange = {
+  from?: Date;
+  to?: Date;
 };
 
 function toDayKey(date: Date) {
@@ -163,16 +167,13 @@ export function buildFinancialControlData(
   threshold = 1000,
   now = new Date()
 ) {
-  const monthStart = startOfMonth(now);
-  const monthEnd = endOfMonth(now);
-  const yearStart = startOfYear(now);
-  const yearEnd = endOfYear(now);
   const daysLeftInMonth = Math.max(
     1,
-    Math.ceil((monthEnd.getTime() - startOfDay(now).getTime()) / dayMs)
-  );
-  const monthTransactions = transactions.filter(
-    (transaction) => transaction.date >= monthStart && transaction.date < monthEnd
+    Math.ceil(
+      (new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime() -
+        startOfDay(now).getTime()) /
+        dayMs
+    )
   );
   const totalIncome = transactions
     .filter((transaction) => transaction.type === "INCOME")
@@ -180,24 +181,16 @@ export function buildFinancialControlData(
   const totalExpense = transactions
     .filter((transaction) => transaction.type === "EXPENSE")
     .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const monthlyIncome = monthTransactions
+  const monthlyIncome = transactions
     .filter((transaction) => transaction.type === "INCOME")
     .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const monthlyExpense = monthTransactions
+  const monthlyExpense = transactions
     .filter((transaction) => transaction.type === "EXPENSE")
     .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const expensesYear = transactions
-    .filter(
-      (transaction) =>
-        transaction.type === "EXPENSE" &&
-        transaction.date >= yearStart &&
-        transaction.date < yearEnd
-    )
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  const expensesYear = monthlyExpense;
   const balance = totalIncome - totalExpense;
-  const totalDebt = loans.reduce((sum, loan) => sum + loan.remainingAmount, 0);
-  const totalInitialDebt = loans.reduce((sum, loan) => sum + loan.initialAmount, 0);
-  const paidAmount = Math.max(0, totalInitialDebt - totalDebt);
+  const debtSummary = getDebtSummary(loans);
+  const totalDebt = debtSummary.totalDebt;
   const netPosition = balance - totalDebt;
   const dailyControl = buildDailyControl(transactions, now);
 
@@ -222,22 +215,30 @@ export function buildFinancialControlData(
       safeDailyLimit: balance / daysLeftInMonth
     },
     recentTransactions: transactions.slice(0, 6),
-    leakage: buildLeakage(monthTransactions, monthlyIncome, threshold),
-    debtSummary: {
-      totalDebt,
-      paymentsThisMonth: loans
-        .filter((loan) => loan.status === "ACTIVE")
-        .reduce((sum, loan) => sum + loan.monthlyPayment, 0),
-      totalInitialDebt,
-      paidAmount,
-      paidPercent: totalInitialDebt > 0 ? (paidAmount / totalInitialDebt) * 100 : 0
-    }
+    leakage: buildLeakage(transactions, monthlyIncome, threshold),
+    debtSummary
   };
 }
 
-export async function getFinancialControlData(userId: string, threshold = 1000) {
+export async function getFinancialControlData(
+  userId: string,
+  threshold = 1000,
+  range: FinancialRange = {}
+) {
+  const dateFilter =
+    range.from || range.to
+      ? {
+          date: {
+            ...(range.from ? { gte: range.from } : {}),
+            ...(range.to ? { lt: range.to } : {})
+          }
+        }
+      : {};
   const transactions = await prisma.transaction.findMany({
-    where: { userId },
+    where: {
+      userId,
+      ...dateFilter
+    },
     include: {
       category: true
     },

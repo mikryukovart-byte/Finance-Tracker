@@ -10,6 +10,7 @@ import {
   Scale,
   Settings
 } from "lucide-react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const navigation = [
@@ -33,10 +34,10 @@ export function Sidebar() {
   return (
     <aside className="border-b border-line bg-sidebar px-4 py-4 lg:sticky lg:top-0 lg:h-screen lg:border-b-0 lg:border-r lg:px-4 lg:py-5">
       <div className="flex items-center justify-between gap-4 lg:block">
-        <a href="/" className="block">
+        <Link href="/" className="block">
           <div className="text-base font-semibold text-ink">Финансы</div>
           <div className="mt-0.5 text-xs text-muted">Личный учет</div>
-        </a>
+        </Link>
       </div>
 
       <nav className="mt-4 flex gap-1 overflow-x-auto pb-1 lg:mt-7 lg:block lg:space-y-1 lg:overflow-visible lg:pb-0">
@@ -46,7 +47,7 @@ export function Sidebar() {
             item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
 
           return (
-            <a
+            <Link
               key={item.href}
               href={item.href}
               className={`flex min-h-10 shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm transition lg:w-full ${
@@ -57,7 +58,7 @@ export function Sidebar() {
             >
               <Icon className="h-4 w-4" aria-hidden="true" />
               <span>{item.label}</span>
-            </a>
+            </Link>
           );
         })}
       </nav>

@@ -6,6 +6,17 @@ export function endOfDay(date = new Date()) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
 }
 
+export function startOfWeek(date = new Date()) {
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + diff);
+}
+
+export function endOfWeek(date = new Date()) {
+  const start = startOfWeek(date);
+  return new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7);
+}
+
 export function startOfMonth(date = new Date()) {
   return new Date(date.getFullYear(), date.getMonth(), 1);
 }
@@ -74,8 +85,10 @@ export function parseDateInput(value: unknown) {
 }
 
 export function dateRangeFromSearch(searchParams: URLSearchParams) {
-  const from = parseDateInput(searchParams.get("dateFrom"));
-  const to = parseDateInput(searchParams.get("dateTo"));
+  const from = parseDateInput(
+    searchParams.get("startDate") ?? searchParams.get("dateFrom")
+  );
+  const to = parseDateInput(searchParams.get("endDate") ?? searchParams.get("dateTo"));
 
   return {
     from: from ? startOfDay(from) : undefined,

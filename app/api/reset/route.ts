@@ -21,6 +21,9 @@ export async function POST(request: Request) {
   }
 
   const result = await prisma.$transaction(async (tx) => {
+    const deletedLoanPayments = await tx.loanPayment.deleteMany({
+      where: { userId: auth.userId }
+    });
     const deletedTransactions = await tx.transaction.deleteMany({
       where: { userId: auth.userId }
     });
@@ -40,6 +43,7 @@ export async function POST(request: Request) {
 
     return {
       transactions: deletedTransactions.count,
+      loanPayments: deletedLoanPayments.count,
       loans: deletedLoans.count,
       categories: deletedCategories.count,
       defaultCategories: defaultSystemCategories.length

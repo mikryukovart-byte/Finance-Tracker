@@ -4,6 +4,7 @@ import {
   Banknote,
   CalendarClock,
   Check,
+  History,
   Pencil,
   Plus,
   Trash2,
@@ -19,54 +20,121 @@ import { StatCard } from "@/components/stat-card";
 import { readErrorMessage } from "@/lib/client-api";
 import {
   debtPriorityLabels,
+  debtTypeLabels,
   formatCurrency,
   formatDate,
   formatPercent,
   loanStatusLabels,
   toDateInputValue
 } from "@/lib/format";
-import type { DebtPriority, Loan, LoanState, LoansResponse } from "@/types/finance";
+import type {
+  DebtPriority,
+  DebtType,
+  Loan,
+  LoanPayment,
+  LoanState,
+  LoansResponse
+} from "@/types/finance";
 
 type LoanForm = {
+  debtType: DebtType;
   title: string;
   lender: string;
   initialAmount: string;
   remainingAmount: string;
   monthlyPayment: string;
+  plannedPayment: string;
+  minimalPayment: string;
+  creditLimit: string;
   interestRate: string;
   paymentDate: string;
   priority: DebtPriority;
   status: LoanState;
 };
 
+type PaymentForm = {
+  amount: string;
+  date: string;
+  description: string;
+};
+
 type LoanErrors = Partial<Record<keyof LoanForm, string>>;
 
 const initialForm: LoanForm = {
+  debtType: "BANK_LOAN",
   title: "",
   lender: "",
   initialAmount: "",
   remainingAmount: "",
   monthlyPayment: "",
+  plannedPayment: "",
+  minimalPayment: "",
+  creditLimit: "",
   interestRate: "0",
-  paymentDate: toDateInputValue(),
+  paymentDate: "",
   priority: "MEDIUM",
   status: "ACTIVE"
 };
+
+function createInitialPaymentForm(): PaymentForm {
+  return {
+    amount: "",
+    date: toDateInputValue(),
+    description: ""
+  };
+}
 
 function parseAmount(value: string) {
   return Number(value.trim().replace(/\s/g, "").replace(",", "."));
 }
 
+function parseOptionalAmount(value: string) {
+  const trimmed = value.trim();
+  return trimmed ? parseAmount(trimmed) : null;
+}
+
+function getScheduledPayment(loan: Loan) {
+  return loan.plannedPayment ?? loan.minimalPayment ?? loan.monthlyPayment ?? 0;
+}
+
+function getProgress(loan: Loan) {
+  if (loan.initialAmount && loan.initialAmount > 0) {
+    return {
+      label: "Погашено",
+      percent: Math.min(
+        100,
+        Math.max(0, ((loan.initialAmount - loan.remainingAmount) / loan.initialAmount) * 100)
+      )
+    };
+  }
+
+  if (loan.debtType === "CREDIT_CARD" && loan.creditLimit && loan.creditLimit > 0) {
+    return {
+      label: "Использовано лимита",
+      percent: Math.min(100, Math.max(0, (loan.remainingAmount / loan.creditLimit) * 100))
+    };
+  }
+
+  return null;
+}
+
 function validateForm(form: LoanForm) {
   const errors: LoanErrors = {};
+  const plannedPayment = parseOptionalAmount(form.plannedPayment);
+  const minimalPayment = parseOptionalAmount(form.minimalPayment);
+  const fallbackPayment = form.debtType === "CREDIT_CARD" ? minimalPayment : plannedPayment;
   const payload = {
+    debtType: form.debtType,
     title: form.title.trim().replace(/\s+/g, " "),
     lender: form.lender.trim().replace(/\s+/g, " ") || null,
-    initialAmount: parseAmount(form.initialAmount),
+    initialAmount: parseOptionalAmount(form.initialAmount),
     remainingAmount: parseAmount(form.remainingAmount),
-    monthlyPayment: parseAmount(form.monthlyPayment),
-    interestRate: parseAmount(form.interestRate || "0"),
-    paymentDate: form.paymentDate,
+    monthlyPayment: fallbackPayment,
+    plannedPayment,
+    minimalPayment,
+    creditLimit: parseOptionalAmount(form.creditLimit),
+    interestRate: parseOptionalAmount(form.interestRate),
+    paymentDate: form.paymentDate || null,
     priority: form.priority,
     status: form.status
   };
@@ -75,8 +143,11 @@ function validateForm(form: LoanForm) {
     errors.title = "Название должно быть не короче 2 символов";
   }
 
-  if (!Number.isFinite(payload.initialAmount) || payload.initialAmount <= 0) {
-    errors.initialAmount = "Введите изначальную сумму больше нуля";
+  if (
+    form.debtType !== "CREDIT_CARD" &&
+    (!Number.isFinite(payload.initialAmount) || !payload.initialAmount || payload.initialAmount <= 0)
+  ) {
+    errors.initialAmount = "Введите общую сумму долга";
   }
 
   if (!Number.isFinite(payload.remainingAmount) || payload.remainingAmount < 0) {
@@ -84,31 +155,44 @@ function validateForm(form: LoanForm) {
   }
 
   if (
-    Number.isFinite(payload.initialAmount) &&
+    payload.initialAmount &&
     Number.isFinite(payload.remainingAmount) &&
-    payload.remainingAmount > payload.initialAmount
+    payload.remainingAmount > payload.initialAmount &&
+    form.debtType !== "CREDIT_CARD"
   ) {
-    errors.remainingAmount = "Остаток не может быть больше изначальной суммы";
+    errors.remainingAmount = "Остаток не может быть больше общей суммы";
   }
 
-  if (!Number.isFinite(payload.monthlyPayment) || payload.monthlyPayment < 0) {
-    errors.monthlyPayment = "Платеж не может быть отрицательным";
+  if (plannedPayment !== null && (!Number.isFinite(plannedPayment) || plannedPayment < 0)) {
+    errors.plannedPayment = "Платеж не может быть отрицательным";
   }
 
-  if (payload.status === "ACTIVE" && payload.monthlyPayment <= 0) {
-    errors.monthlyPayment = "Для активного кредита укажите ежемесячный платеж";
+  if (minimalPayment !== null && (!Number.isFinite(minimalPayment) || minimalPayment < 0)) {
+    errors.minimalPayment = "Платеж не может быть отрицательным";
   }
 
   if (
-    !Number.isFinite(payload.interestRate) ||
-    payload.interestRate < 0 ||
-    payload.interestRate > 100
+    payload.creditLimit !== null &&
+    (!Number.isFinite(payload.creditLimit) || payload.creditLimit <= 0)
   ) {
-    errors.interestRate = "Процент должен быть от 0 до 100";
+    errors.creditLimit = "Лимит должен быть больше нуля";
   }
 
-  if (!payload.paymentDate) {
-    errors.paymentDate = "Укажите дату платежа";
+  if (
+    payload.creditLimit &&
+    Number.isFinite(payload.remainingAmount) &&
+    payload.remainingAmount > payload.creditLimit
+  ) {
+    errors.remainingAmount = "Долг не может быть больше кредитного лимита";
+  }
+
+  if (
+    payload.interestRate !== null &&
+    (!Number.isFinite(payload.interestRate) ||
+      payload.interestRate < 0 ||
+      payload.interestRate > 100)
+  ) {
+    errors.interestRate = "Процент должен быть от 0 до 100";
   }
 
   return {
@@ -127,8 +211,10 @@ export function LoansClient() {
   const [form, setForm] = useState<LoanForm>(initialForm);
   const [errors, setErrors] = useState<LoanErrors>({});
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [paymentForms, setPaymentForms] = useState<Record<string, PaymentForm>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [payingId, setPayingId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<"neutral" | "success" | "error">("neutral");
 
@@ -136,16 +222,16 @@ export function LoansClient() {
     () =>
       loans
         .filter((loan) => loan.status === "CLOSED")
-        .reduce((sum, loan) => sum + loan.initialAmount, 0),
+        .reduce((sum, loan) => sum + (loan.initialAmount ?? 0), 0),
     [loans]
   );
 
   const nearestPayment = useMemo(() => {
     const activeLoans = loans
-      .filter((loan) => loan.status === "ACTIVE")
+      .filter((loan) => loan.status === "ACTIVE" && loan.paymentDate && getScheduledPayment(loan) > 0)
       .sort(
         (a, b) =>
-          new Date(a.paymentDate).getTime() - new Date(b.paymentDate).getTime()
+          new Date(a.paymentDate ?? 0).getTime() - new Date(b.paymentDate ?? 0).getTime()
       );
 
     return activeLoans[0] ?? null;
@@ -180,21 +266,27 @@ export function LoansClient() {
   }, []);
 
   function resetForm() {
-    setForm({ ...initialForm, paymentDate: toDateInputValue() });
+    setForm(initialForm);
     setErrors({});
     setEditingId(null);
   }
 
   function editLoan(loan: Loan) {
+    const plannedPayment = loan.plannedPayment ?? loan.monthlyPayment;
+
     setEditingId(loan.id);
     setForm({
+      debtType: loan.debtType,
       title: loan.title,
       lender: loan.lender ?? "",
-      initialAmount: String(loan.initialAmount),
+      initialAmount: loan.initialAmount ? String(loan.initialAmount) : "",
       remainingAmount: String(loan.remainingAmount),
-      monthlyPayment: String(loan.monthlyPayment),
-      interestRate: String(loan.interestRate),
-      paymentDate: toDateInputValue(loan.paymentDate),
+      monthlyPayment: loan.monthlyPayment ? String(loan.monthlyPayment) : "",
+      plannedPayment: plannedPayment ? String(plannedPayment) : "",
+      minimalPayment: loan.minimalPayment ? String(loan.minimalPayment) : "",
+      creditLimit: loan.creditLimit ? String(loan.creditLimit) : "",
+      interestRate: loan.interestRate !== null ? String(loan.interestRate) : "",
+      paymentDate: loan.paymentDate ? toDateInputValue(loan.paymentDate) : "",
       priority: loan.priority,
       status: loan.status
     });
@@ -271,6 +363,86 @@ export function LoansClient() {
     }
   }
 
+  function updatePaymentForm(loanId: string, patch: Partial<PaymentForm>) {
+    setPaymentForms((current) => ({
+      ...current,
+      [loanId]: {
+        ...(current[loanId] ?? createInitialPaymentForm()),
+        ...patch
+      }
+    }));
+  }
+
+  async function addPayment(loan: Loan) {
+    const paymentForm = paymentForms[loan.id] ?? createInitialPaymentForm();
+    const amount = parseAmount(paymentForm.amount);
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setMessage("Введите сумму платежа больше нуля");
+      setMessageTone("error");
+      return;
+    }
+
+    setPayingId(loan.id);
+    setMessage("");
+
+    try {
+      const response = await fetch(`/api/loans/${loan.id}/payments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount,
+          date: paymentForm.date || toDateInputValue(),
+          description: paymentForm.description
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      setPaymentForms((current) => ({
+        ...current,
+        [loan.id]: createInitialPaymentForm()
+      }));
+      await loadLoans(false);
+      setMessage("Платеж добавлен и учтен как расход");
+      setMessageTone("success");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Не удалось добавить платеж");
+      setMessageTone("error");
+    } finally {
+      setPayingId(null);
+    }
+  }
+
+  async function deletePayment(loan: Loan, payment: LoanPayment) {
+    const confirmed = window.confirm("Удалить этот платеж и связанную расходную операцию?");
+
+    if (!confirmed) {
+      return;
+    }
+
+    setMessage("");
+
+    try {
+      const response = await fetch(`/api/loans/${loan.id}/payments/${payment.id}`, {
+        method: "DELETE"
+      });
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      await loadLoans(false);
+      setMessage("Платеж удален");
+      setMessageTone("success");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Не удалось удалить платеж");
+      setMessageTone("error");
+    }
+  }
+
   return (
     <div>
       <PageHeader
@@ -314,7 +486,7 @@ export function LoansClient() {
               </div>
             </div>
             <div className="text-lg font-semibold text-ink">
-              {formatCurrency(nearestPayment.monthlyPayment)}
+              {formatCurrency(getScheduledPayment(nearestPayment))}
             </div>
           </div>
         </section>
@@ -368,8 +540,56 @@ export function LoansClient() {
               />
             </div>
 
+            <div>
+              <label className="field-label" htmlFor="debtType">
+                Тип долга
+              </label>
+              <select
+                id="debtType"
+                className="field mt-1"
+                value={form.debtType}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    debtType: event.target.value as DebtType,
+                    plannedPayment:
+                      event.target.value === "CREDIT_CARD" ? "" : current.plannedPayment,
+                    minimalPayment:
+                      event.target.value === "CREDIT_CARD" ? current.minimalPayment : ""
+                  }))
+                }
+              >
+                <option value="BANK_LOAN">Банковский кредит</option>
+                <option value="CREDIT_CARD">Кредитная карта</option>
+                <option value="PERSONAL_DEBT">Личный долг / гибкий долг</option>
+              </select>
+            </div>
+
             <div className="grid gap-4 sm:grid-cols-2">
-              <div>
+              {form.debtType === "CREDIT_CARD" ? (
+                <div>
+                  <label className="field-label" htmlFor="creditLimit">
+                    Кредитный лимит
+                  </label>
+                  <input
+                    id="creditLimit"
+                    className="field mt-1"
+                    min="0.01"
+                    step="0.01"
+                    type="number"
+                    value={form.creditLimit}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        creditLimit: event.target.value
+                      }))
+                    }
+                    placeholder="Можно оставить пустым"
+                  />
+                  <FieldError message={errors.creditLimit} />
+                </div>
+              ) : (
+                <div>
                 <label className="field-label" htmlFor="initialAmount">
                   Общая сумма долга
                 </label>
@@ -390,10 +610,11 @@ export function LoansClient() {
                 />
                 <FieldError message={errors.initialAmount} />
               </div>
+              )}
 
               <div>
                 <label className="field-label" htmlFor="remainingAmount">
-                  Остаток
+                  {form.debtType === "CREDIT_CARD" ? "Текущий долг" : "Остаток"}
                 </label>
                 <input
                   id="remainingAmount"
@@ -417,7 +638,7 @@ export function LoansClient() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <label className="field-label" htmlFor="monthlyPayment">
-                  Минимальный платеж
+                  Плановый / минимальный платеж
                 </label>
                 <input
                   id="monthlyPayment"
@@ -425,21 +646,39 @@ export function LoansClient() {
                   min="0"
                   step="0.01"
                   type="number"
-                  value={form.monthlyPayment}
+                  value={
+                    form.debtType === "CREDIT_CARD"
+                      ? form.minimalPayment
+                      : form.plannedPayment
+                  }
                   onChange={(event) =>
                     setForm((current) => ({
                       ...current,
-                      monthlyPayment: event.target.value
+                      monthlyPayment: event.target.value,
+                      plannedPayment:
+                        current.debtType === "CREDIT_CARD" ? "" : event.target.value,
+                      minimalPayment:
+                        current.debtType === "CREDIT_CARD" ? event.target.value : ""
                     }))
                   }
-                  placeholder="Например, 32000"
+                  placeholder="Можно оставить пустым"
                 />
-                <FieldError message={errors.monthlyPayment} />
+                <p className="mt-1 text-xs text-muted">
+                  Можно оставить пустым, если платеж нерегулярный
+                </p>
+                <FieldError
+                  message={
+                    form.debtType === "CREDIT_CARD"
+                      ? errors.minimalPayment
+                      : errors.plannedPayment
+                  }
+                />
               </div>
 
-              <div>
+              {form.debtType !== "PERSONAL_DEBT" ? (
+                <div>
                 <label className="field-label" htmlFor="interestRate">
-                  Процент годовых
+                  Процент
                 </label>
                 <input
                   id="interestRate"
@@ -459,6 +698,7 @@ export function LoansClient() {
                 />
                 <FieldError message={errors.interestRate} />
               </div>
+              ) : null}
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -548,18 +788,9 @@ export function LoansClient() {
           ) : (
             <div className="grid gap-4">
               {loans.map((loan) => {
-                const paidPercent =
-                  loan.initialAmount > 0
-                    ? Math.min(
-                        100,
-                        Math.max(
-                          0,
-                          ((loan.initialAmount - loan.remainingAmount) /
-                            loan.initialAmount) *
-                            100
-                        )
-                      )
-                    : 0;
+                const progress = getProgress(loan);
+                const scheduledPayment = getScheduledPayment(loan);
+                const paymentForm = paymentForms[loan.id] ?? createInitialPaymentForm();
                 const statusTone =
                   loan.status === "ACTIVE"
                     ? "bg-profit/10 text-profit"
@@ -582,6 +813,9 @@ export function LoansClient() {
                           <span className={`rounded-full px-2 py-0.5 text-xs ${statusTone}`}>
                             {loanStatusLabels[loan.status]}
                           </span>
+                          <span className="rounded-full bg-soft px-2 py-0.5 text-xs text-muted">
+                            {debtTypeLabels[loan.debtType]}
+                          </span>
                           <span className={`rounded-full px-2 py-0.5 text-xs ${priorityTone}`}>
                             {debtPriorityLabels[loan.priority]}
                           </span>
@@ -594,43 +828,59 @@ export function LoansClient() {
 
                         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                           <div>
-                            <div className="text-xs text-muted">Общая сумма долга</div>
+                            <div className="text-xs text-muted">
+                              {loan.debtType === "CREDIT_CARD" ? "Кредитный лимит" : "Общая сумма долга"}
+                            </div>
                             <div className="font-medium text-ink">
-                              {formatCurrency(loan.initialAmount)}
+                              {loan.debtType === "CREDIT_CARD"
+                                ? loan.creditLimit
+                                  ? formatCurrency(loan.creditLimit)
+                                  : "Не указан"
+                                : loan.initialAmount
+                                  ? formatCurrency(loan.initialAmount)
+                                  : "Не указана"}
                             </div>
                           </div>
                           <div>
-                            <div className="text-xs text-muted">Остаток</div>
+                            <div className="text-xs text-muted">
+                              {loan.debtType === "CREDIT_CARD" ? "Текущий долг" : "Остаток"}
+                            </div>
                             <div className="font-medium text-loss">
                               {formatCurrency(loan.remainingAmount)}
                             </div>
                           </div>
                           <div>
-                            <div className="text-xs text-muted">Минимальный платеж</div>
+                            <div className="text-xs text-muted">
+                              Плановый / минимальный платеж
+                            </div>
                             <div className="font-medium text-ink">
-                              {formatCurrency(loan.monthlyPayment)}
+                              {scheduledPayment > 0 ? formatCurrency(scheduledPayment) : "Не указан"}
                             </div>
                           </div>
                           <div>
                             <div className="text-xs text-muted">Процент</div>
                             <div className="font-medium text-ink">
-                              {formatPercent(loan.interestRate)}%
+                              {loan.interestRate !== null
+                                ? `${formatPercent(loan.interestRate)}%`
+                                : "Не указан"}
                             </div>
                           </div>
                         </div>
 
-                        <div className="mt-4">
-                          <div className="mb-2 flex justify-between text-xs text-muted">
-                            <span>Погашено</span>
-                            <span>{formatPercent(paidPercent)}%</span>
+                        {progress ? (
+                          <div className="mt-4">
+                            <div className="mb-2 flex justify-between text-xs text-muted">
+                              <span>{progress.label}</span>
+                              <span>{formatPercent(progress.percent)}%</span>
+                            </div>
+                            <div className="h-2 overflow-hidden rounded-full bg-soft">
+                              <div
+                                className="h-full rounded-full bg-accent"
+                                style={{ width: `${progress.percent}%` }}
+                              />
+                            </div>
                           </div>
-                          <div className="h-2 overflow-hidden rounded-full bg-soft">
-                            <div
-                              className="h-full rounded-full bg-accent"
-                              style={{ width: `${paidPercent}%` }}
-                            />
-                          </div>
-                        </div>
+                        ) : null}
 
                         <div className="mt-3 text-sm text-muted">
                           Дата платежа: {formatDate(loan.paymentDate)}
@@ -658,6 +908,93 @@ export function LoansClient() {
                         </button>
                       </div>
                     </div>
+
+                    {loan.status !== "CLOSED" ? (
+                      <div className="mt-5 border-t border-line pt-4">
+                        <div className="mb-3 flex items-center gap-2 text-sm font-medium text-ink">
+                          <Plus className="h-4 w-4" aria-hidden="true" />
+                          Внести сумму
+                        </div>
+                        <div className="grid gap-3 lg:grid-cols-[1fr_150px_1.3fr_auto]">
+                          <input
+                            className="field"
+                            min="0.01"
+                            step="0.01"
+                            type="number"
+                            value={paymentForm.amount}
+                            onChange={(event) =>
+                              updatePaymentForm(loan.id, { amount: event.target.value })
+                            }
+                            placeholder="Сумма"
+                            aria-label="Сумма платежа"
+                          />
+                          <input
+                            className="field"
+                            type="date"
+                            value={paymentForm.date}
+                            onChange={(event) =>
+                              updatePaymentForm(loan.id, { date: event.target.value })
+                            }
+                            aria-label="Дата платежа"
+                          />
+                          <input
+                            className="field"
+                            value={paymentForm.description}
+                            onChange={(event) =>
+                              updatePaymentForm(loan.id, {
+                                description: event.target.value
+                              })
+                            }
+                            placeholder="Описание платежа"
+                            aria-label="Описание платежа"
+                          />
+                          <button
+                            type="button"
+                            className="btn-secondary justify-center"
+                            disabled={payingId === loan.id}
+                            onClick={() => addPayment(loan)}
+                          >
+                            {payingId === loan.id ? "Сохранение" : "Внести сумму"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {loan.payments && loan.payments.length > 0 ? (
+                      <div className="mt-5 border-t border-line pt-4">
+                        <div className="mb-3 flex items-center gap-2 text-sm font-medium text-ink">
+                          <History className="h-4 w-4" aria-hidden="true" />
+                          История платежей
+                        </div>
+                        <div className="divide-y divide-line overflow-hidden rounded-md border border-line">
+                          {loan.payments.map((payment) => (
+                            <div
+                              key={payment.id}
+                              className="flex flex-col gap-2 px-3 py-2 text-sm hover:bg-hover sm:flex-row sm:items-center sm:justify-between"
+                            >
+                              <div>
+                                <div className="font-medium text-ink">
+                                  {formatCurrency(payment.amount)}
+                                </div>
+                                <div className="text-xs text-muted">
+                                  {formatDate(payment.date)}
+                                  {payment.description ? ` · ${payment.description}` : ""}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                className="btn-danger self-start px-2 sm:self-auto"
+                                onClick={() => deletePayment(loan, payment)}
+                                aria-label="Удалить платеж"
+                                title="Удалить платеж"
+                              >
+                                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                   </article>
                 );
               })}

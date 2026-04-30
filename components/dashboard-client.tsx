@@ -3,7 +3,6 @@
 import {
   ArrowDownCircle,
   ArrowUpCircle,
-  CalendarDays,
   CheckCircle2,
   Landmark,
   PiggyBank,
@@ -22,10 +21,17 @@ import {
 
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
+import { PeriodFilter } from "@/components/period-filter";
 import { QuickTransactionInput } from "@/components/quick-transaction-input";
 import { StatCard } from "@/components/stat-card";
-import { fetchCategories, invalidateCategoriesCache, readErrorMessage } from "@/lib/client-api";
+import {
+  buildQuery,
+  fetchCategories,
+  invalidateCategoriesCache,
+  readErrorMessage
+} from "@/lib/client-api";
 import { formatCurrency, formatDate, toDateInputValue, typeLabels } from "@/lib/format";
+import { buildPeriodQuery, createPeriodState, describePeriod } from "@/lib/period";
 import { parseSettings, storageKey } from "@/lib/settings";
 import type { Category, DashboardStats, TransactionKind } from "@/types/finance";
 
@@ -53,6 +59,7 @@ function parseAmount(value: string) {
 export function DashboardClient() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [period, setPeriod] = useState(() => createPeriodState("month"));
   const [quickAdd, setQuickAdd] = useState<QuickAddForm>(initialQuickAdd);
   const [quickStatus, setQuickStatus] = useState<QuickAddStatus | null>(null);
   const [successPulse, setSuccessPulse] = useState(false);
@@ -69,7 +76,9 @@ export function DashboardClient() {
       if (showLoader) {
         setLoading(true);
       }
-      const response = await fetch("/api/dashboard", { cache: "no-store" });
+      const response = await fetch(`/api/dashboard${buildQuery(buildPeriodQuery(period))}`, {
+        cache: "no-store"
+      });
 
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
@@ -83,7 +92,7 @@ export function DashboardClient() {
         setLoading(false);
       }
     }
-  }, []);
+  }, [period]);
 
   const loadCategories = useCallback(async () => {
     try {
@@ -216,15 +225,25 @@ export function DashboardClient() {
   }
 
   const monthLimitPercent =
-    stats && monthlyLimit > 0 ? (stats.expensesMonth / monthlyLimit) * 100 : 0;
-  const isOverspending = Boolean(stats && monthlyLimit > 0 && stats.expensesMonth > monthlyLimit);
+    stats && monthlyLimit > 0 ? (stats.totalExpense / monthlyLimit) * 100 : 0;
+  const isOverspending = Boolean(stats && monthlyLimit > 0 && stats.totalExpense > monthlyLimit);
+  const periodDays = Math.max(
+    1,
+    Math.ceil(
+      (new Date(`${period.endDate}T12:00:00`).getTime() -
+        new Date(`${period.startDate}T12:00:00`).getTime()) /
+        86_400_000
+    ) + 1
+  );
 
   return (
     <div className="pb-24 md:pb-0">
       <PageHeader
         title="Главная"
-        description="Быстрый ввод и ежедневный обзор денег."
+        description={`Быстрый ввод и обзор денег за период: ${describePeriod(period)}.`}
       />
+
+      <PeriodFilter value={period} onChange={setPeriod} />
 
       <div className="mb-6">
         <QuickTransactionInput
@@ -381,38 +400,32 @@ export function DashboardClient() {
         <>
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             <StatCard
-              label="Баланс"
+              label="Баланс за период"
               value={formatCurrency(stats.balance)}
               icon={PiggyBank}
               tone={stats.balance >= 0 ? "income" : "expense"}
             />
             <StatCard
-              label="Расходы сегодня"
-              value={formatCurrency(stats.expensesToday)}
-              icon={CalendarDays}
-              tone="expense"
-            />
-            <StatCard
-              label="Расходы за месяц"
-              value={formatCurrency(stats.expensesMonth)}
+              label="Расходы за период"
+              value={formatCurrency(stats.totalExpense)}
               icon={WalletCards}
               tone="expense"
             />
             <StatCard
-              label="Общий доход"
+              label="Доходы за период"
               value={formatCurrency(stats.totalIncome)}
               icon={ArrowUpCircle}
               tone="income"
             />
             <StatCard
-              label="Общие расходы"
-              value={formatCurrency(stats.totalExpense)}
+              label="Расходы сегодня"
+              value={formatCurrency(stats.expensesToday)}
               icon={ArrowDownCircle}
               tone="expense"
             />
             <StatCard
-              label="Расходы за год"
-              value={formatCurrency(stats.expensesYear)}
+              label="Средний расход в день"
+              value={formatCurrency(stats.totalExpense / periodDays)}
               icon={Landmark}
               tone="expense"
             />
@@ -436,7 +449,7 @@ export function DashboardClient() {
                     </div>
                   </div>
                   <div>
-                    <div className="text-muted">Расходы месяца</div>
+                    <div className="text-muted">Расходы периода</div>
                     <div className="mt-1 font-medium text-ink">
                       {formatCurrency(stats.dailyControl.monthSpending)}
                     </div>
@@ -491,9 +504,9 @@ export function DashboardClient() {
           >
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-ink">Быстрый обзор месяца</h2>
+                <h2 className="text-lg font-semibold text-ink">Быстрый обзор периода</h2>
                 <p className="mt-1 text-sm text-muted">
-                  Расходы: {formatCurrency(stats.expensesMonth)}
+                  Расходы: {formatCurrency(stats.totalExpense)}
                   {monthlyLimit > 0 ? ` из ${formatCurrency(monthlyLimit)}` : ""}
                 </p>
               </div>

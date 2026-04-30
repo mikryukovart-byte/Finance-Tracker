@@ -134,11 +134,13 @@ async function main() {
       data: [
         {
           userId,
+          debtType: "BANK_LOAN",
           title: "Ипотека",
           lender: "Банк",
           initialAmount: 4200000,
           remainingAmount: 3650000,
           monthlyPayment: 68000,
+          plannedPayment: 68000,
           interestRate: 8.6,
           paymentDate: inCurrentMonth(15),
           priority: "HIGH",
@@ -146,11 +148,13 @@ async function main() {
         },
         {
           userId,
+          debtType: "BANK_LOAN",
           title: "Кредит на автомобиль",
           lender: "Банк",
           initialAmount: 980000,
           remainingAmount: 410000,
           monthlyPayment: 31500,
+          plannedPayment: 31500,
           interestRate: 12.4,
           paymentDate: inCurrentMonth(23),
           priority: "MEDIUM",

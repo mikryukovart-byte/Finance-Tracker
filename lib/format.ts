@@ -1,4 +1,4 @@
-import type { DebtPriority, LoanState, TransactionKind } from "@/types/finance";
+import type { DebtPriority, DebtType, LoanState, TransactionKind } from "@/types/finance";
 
 export const typeLabels: Record<TransactionKind, string> = {
   INCOME: "Доход",
@@ -17,6 +17,12 @@ export const debtPriorityLabels: Record<DebtPriority, string> = {
   LOW: "Низкий"
 };
 
+export const debtTypeLabels: Record<DebtType, string> = {
+  BANK_LOAN: "Банковский кредит",
+  CREDIT_CARD: "Кредитная карта",
+  PERSONAL_DEBT: "Личный долг"
+};
+
 export function formatCurrency(value: number) {
   return new Intl.NumberFormat("ru-RU", {
     style: "currency",
@@ -31,7 +37,11 @@ export function formatPercent(value: number) {
   }).format(value || 0);
 }
 
-export function formatDate(value: string | Date) {
+export function formatDate(value: string | Date | null | undefined) {
+  if (!value) {
+    return "Не указана";
+  }
+
   return new Intl.DateTimeFormat("ru-RU", {
     day: "2-digit",
     month: "short",
