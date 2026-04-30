@@ -12,6 +12,7 @@
     "start": "next start",
     "lint": "next lint",
     "db:push": "prisma db push",
+    "db:backfill-accounts": "node scripts/backfill-transaction-accounts.mjs",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "prisma db seed",
     "db:studio": "prisma studio"

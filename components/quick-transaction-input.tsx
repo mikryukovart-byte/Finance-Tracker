@@ -5,13 +5,14 @@ import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  fetchAccounts,
   fetchCategories,
   invalidateCategoriesCache,
   readErrorMessage,
   setCachedCategories
 } from "@/lib/client-api";
 import { toDateInputValue, typeLabels } from "@/lib/format";
-import type { Category, TransactionKind } from "@/types/finance";
+import type { Account, Category, TransactionKind } from "@/types/finance";
 
 type QuickTransactionInputProps = {
   title?: string;
@@ -108,6 +109,8 @@ export function QuickTransactionInput({
   onAdded
 }: QuickTransactionInputProps) {
   const [text, setText] = useState("");
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [accountId, setAccountId] = useState("");
   const [categories, setCategories] = useState<Category[]>([]);
   const [manual, setManual] = useState<ManualState | null>(null);
   const [message, setMessage] = useState("");
@@ -115,15 +118,21 @@ export function QuickTransactionInput({
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    async function loadCategories() {
+    async function loadData() {
       try {
-        setCategories(await fetchCategories());
+        const [categoryData, accountData] = await Promise.all([
+          fetchCategories(),
+          fetchAccounts()
+        ]);
+        setCategories(categoryData);
+        setAccounts(accountData.accounts);
+        setAccountId((current) => current || accountData.accounts[0]?.id || "");
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "Не удалось загрузить категории");
       }
     }
 
-    loadCategories();
+    loadData();
   }, []);
 
   const manualCategories = useMemo(
@@ -186,6 +195,7 @@ export function QuickTransactionInput({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           amount: parsed.amount,
+          accountId,
           categoryId,
           date: toDateInputValue(),
           description: parsed.description,
@@ -243,7 +253,7 @@ export function QuickTransactionInput({
   return (
     <section className="card p-3 sm:p-4">
       <form className="space-y-3" onSubmit={handleSubmit}>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
           <label className="sr-only" htmlFor="quickTransactionText">
             {title}
           </label>
@@ -270,6 +280,24 @@ export function QuickTransactionInput({
               </>
             )}
           </button>
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
+          <select
+            className="field"
+            value={accountId}
+            onChange={(event) => setAccountId(event.target.value)}
+            aria-label="Счет для быстрого ввода"
+          >
+            {accounts.map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.name}
+              </option>
+            ))}
+          </select>
+          <Link href="/accounts" className="btn-secondary justify-center">
+            Счета
+          </Link>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted">

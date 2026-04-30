@@ -22,6 +22,24 @@ model Category {
   @@index([userId, type])
 }
 
+model Account {
+  id                String        @id @default(cuid())
+  userId            String
+  name              String
+  balance           Float         @default(0)
+  currency          String        @default("RUB")
+  transactions      Transaction[]
+  linkedLoans       Loan[]
+  outgoingTransfers Transfer[]    @relation("TransferFromAccount")
+  incomingTransfers Transfer[]    @relation("TransferToAccount")
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@unique([id, userId])
+  @@unique([userId, name])
+  @@index([userId, currency])
+}
+
 model Transaction {
   id          String   @id @default(cuid())
   userId      String
@@ -30,13 +48,16 @@ model Transaction {
   date        DateTime
   description String?
   categoryId  String
+  accountId   String?
   category    Category @relation(fields: [categoryId, userId], references: [id, userId], onDelete: Restrict)
+  account     Account? @relation(fields: [accountId, userId], references: [id, userId], onDelete: Restrict)
   loanPayments LoanPayment[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@index([userId, date])
   @@index([userId, type])
+  @@index([userId, accountId])
   @@index([categoryId])
 }
 
@@ -54,6 +75,8 @@ model Loan {
   creditLimit     Float?
   interestRate    Float?
   paymentDate     DateTime?
+  accountId       String?
+  account         Account? @relation(fields: [accountId, userId], references: [id, userId], onDelete: Restrict)
   priority        String   @default("MEDIUM")
   status          String   @default("ACTIVE")
   payments        LoanPayment[]
@@ -64,6 +87,25 @@ model Loan {
   @@index([userId, debtType])
   @@index([userId, priority])
   @@index([userId, paymentDate])
+  @@index([userId, accountId])
+}
+
+model Transfer {
+  id            String   @id @default(cuid())
+  userId        String
+  fromAccountId String
+  toAccountId   String
+  fromAccount   Account  @relation("TransferFromAccount", fields: [fromAccountId, userId], references: [id, userId], onDelete: Restrict)
+  toAccount     Account  @relation("TransferToAccount", fields: [toAccountId, userId], references: [id, userId], onDelete: Restrict)
+  amount        Float
+  date          DateTime
+  description   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId, date])
+  @@index([userId, fromAccountId])
+  @@index([userId, toAccountId])
 }
 
 model LoanPayment {

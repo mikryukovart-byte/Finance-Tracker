@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
+import { defaultAccountName } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { defaultSystemCategories } from "@/lib/default-categories";
 import { prisma } from "@/lib/prisma";
@@ -27,7 +28,13 @@ export async function POST(request: Request) {
     const deletedTransactions = await tx.transaction.deleteMany({
       where: { userId: auth.userId }
     });
+    const deletedTransfers = await tx.transfer.deleteMany({
+      where: { userId: auth.userId }
+    });
     const deletedLoans = await tx.loan.deleteMany({
+      where: { userId: auth.userId }
+    });
+    const deletedAccounts = await tx.account.deleteMany({
       where: { userId: auth.userId }
     });
     const deletedCategories = await tx.category.deleteMany({
@@ -40,11 +47,21 @@ export async function POST(request: Request) {
         userId: auth.userId
       }))
     });
+    await tx.account.create({
+      data: {
+        userId: auth.userId,
+        name: defaultAccountName,
+        balance: 0,
+        currency: "RUB"
+      }
+    });
 
     return {
       transactions: deletedTransactions.count,
       loanPayments: deletedLoanPayments.count,
+      transfers: deletedTransfers.count,
       loans: deletedLoans.count,
+      accounts: deletedAccounts.count,
       categories: deletedCategories.count,
       defaultCategories: defaultSystemCategories.length
     };

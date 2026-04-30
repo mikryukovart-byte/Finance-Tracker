@@ -1,0 +1,86 @@
+import { NextResponse } from "next/server";
+
+import { badRequest, readJsonBody } from "@/lib/api";
+import { isAuthError, requireAuth } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { firstZodError, transferSchema } from "@/lib/validation";
+
+export const dynamic = "force-dynamic";
+
+export async function GET() {
+  const auth = await requireAuth();
+
+  if (isAuthError(auth)) {
+    return auth;
+  }
+
+  const transfers = await prisma.transfer.findMany({
+    where: { userId: auth.userId },
+    include: {
+      fromAccount: true,
+      toAccount: true
+    },
+    orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+    take: 30
+  });
+
+  return NextResponse.json(transfers);
+}
+
+export async function POST(request: Request) {
+  const auth = await requireAuth();
+
+  if (isAuthError(auth)) {
+    return auth;
+  }
+
+  const body = await readJsonBody(request);
+
+  if (!body) {
+    return badRequest();
+  }
+
+  const parsed = transferSchema.safeParse(body);
+
+  if (!parsed.success) {
+    return NextResponse.json({ message: firstZodError(parsed.error) }, { status: 400 });
+  }
+
+  const accounts = await prisma.account.findMany({
+    where: {
+      userId: auth.userId,
+      id: {
+        in: [parsed.data.fromAccountId, parsed.data.toAccountId]
+      }
+    }
+  });
+
+  if (accounts.length !== 2) {
+    return NextResponse.json({ message: "Выберите существующие счета" }, { status: 400 });
+  }
+
+  const transfer = await prisma.$transaction(async (tx) => {
+    const saved = await tx.transfer.create({
+      data: {
+        ...parsed.data,
+        userId: auth.userId
+      },
+      include: {
+        fromAccount: true,
+        toAccount: true
+      }
+    });
+    await tx.account.update({
+      where: { id: parsed.data.fromAccountId },
+      data: { balance: { decrement: parsed.data.amount } }
+    });
+    await tx.account.update({
+      where: { id: parsed.data.toAccountId },
+      data: { balance: { increment: parsed.data.amount } }
+    });
+
+    return saved;
+  });
+
+  return NextResponse.json(transfer, { status: 201 });
+}

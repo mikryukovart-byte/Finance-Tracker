@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
+import { findOwnedAccount, getTransactionImpact } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { dateRangeFromSearch } from "@/lib/date-ranges";
 import { prisma } from "@/lib/prisma";
@@ -42,7 +43,7 @@ export async function GET(request: Request) {
 
   const transactions = await prisma.transaction.findMany({
     where,
-    include: { category: true },
+    include: { category: true, account: true },
     orderBy:
       sortBy === "amount"
         ? [{ amount: sortDir }, { date: "desc" }, { createdAt: "desc" }]
@@ -71,6 +72,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ message: firstZodError(parsed.error) }, { status: 400 });
   }
 
+  const account = await findOwnedAccount(auth.userId, parsed.data.accountId);
+
+  if (!account) {
+    return NextResponse.json({ message: "Выберите существующий счет" }, { status: 400 });
+  }
+
   const category = await prisma.category.findFirst({
     where: {
       userId: auth.userId,
@@ -86,12 +93,24 @@ export async function POST(request: Request) {
     );
   }
 
-  const transaction = await prisma.transaction.create({
-    data: {
-      ...parsed.data,
-      userId: auth.userId
-    },
-    include: { category: true }
+  const transaction = await prisma.$transaction(async (tx) => {
+    const saved = await tx.transaction.create({
+      data: {
+        ...parsed.data,
+        userId: auth.userId
+      },
+      include: { category: true, account: true }
+    });
+    await tx.account.update({
+      where: { id: parsed.data.accountId },
+      data: {
+        balance: {
+          increment: getTransactionImpact(parsed.data.type, parsed.data.amount)
+        }
+      }
+    });
+
+    return saved;
   });
 
   return NextResponse.json(transaction, { status: 201 });

@@ -26,6 +26,7 @@ import { QuickTransactionInput } from "@/components/quick-transaction-input";
 import { StatCard } from "@/components/stat-card";
 import {
   buildQuery,
+  fetchAccounts,
   fetchCategories,
   invalidateCategoriesCache,
   readErrorMessage
@@ -33,9 +34,10 @@ import {
 import { formatCurrency, formatDate, toDateInputValue, typeLabels } from "@/lib/format";
 import { buildPeriodQuery, createPeriodState, describePeriod } from "@/lib/period";
 import { parseSettings, storageKey } from "@/lib/settings";
-import type { Category, DashboardStats, TransactionKind } from "@/types/finance";
+import type { Account, Category, DashboardStats, TransactionKind } from "@/types/finance";
 
 type QuickAddForm = {
+  accountId: string;
   amount: string;
   categoryId: string;
   type: TransactionKind;
@@ -47,6 +49,7 @@ type QuickAddStatus = {
 };
 
 const initialQuickAdd: QuickAddForm = {
+  accountId: "",
   amount: "",
   categoryId: "",
   type: "EXPENSE"
@@ -58,6 +61,7 @@ function parseAmount(value: string) {
 
 export function DashboardClient() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [period, setPeriod] = useState(() => createPeriodState("month"));
   const [quickAdd, setQuickAdd] = useState<QuickAddForm>(initialQuickAdd);
@@ -96,7 +100,12 @@ export function DashboardClient() {
 
   const loadCategories = useCallback(async () => {
     try {
-      setCategories(await fetchCategories());
+      const [categoryData, accountData] = await Promise.all([
+        fetchCategories(),
+        fetchAccounts()
+      ]);
+      setCategories(categoryData);
+      setAccounts(accountData.accounts);
     } catch (err) {
       setQuickStatus({
         message: err instanceof Error ? err.message : "Не удалось загрузить категории",
@@ -104,6 +113,17 @@ export function DashboardClient() {
       });
     }
   }, []);
+
+  useEffect(() => {
+    if (accounts.length === 0) {
+      setQuickAdd((current) => ({ ...current, accountId: "" }));
+      return;
+    }
+
+    if (!accounts.some((account) => account.id === quickAdd.accountId)) {
+      setQuickAdd((current) => ({ ...current, accountId: accounts[0].id }));
+    }
+  }, [accounts, quickAdd.accountId]);
 
   useEffect(() => {
     loadStats();
@@ -184,6 +204,7 @@ export function DashboardClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           amount,
+          accountId: quickAdd.accountId,
           categoryId: quickAdd.categoryId,
           date: toDateInputValue(),
           description: "",
@@ -357,6 +378,31 @@ export function DashboardClient() {
             )}
           </div>
 
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <label className="field-label" htmlFor="quickAccount">
+                Счет
+              </label>
+              <Link href="/accounts" className="text-sm font-medium text-accent hover:underline">
+                Управлять
+              </Link>
+            </div>
+            <select
+              id="quickAccount"
+              className="field"
+              value={quickAdd.accountId}
+              onChange={(event) =>
+                setQuickAdd((current) => ({ ...current, accountId: event.target.value }))
+              }
+            >
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.name} · {formatCurrency(account.balance, account.currency)}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {quickStatus ? (
             <div
               className={`rounded-md border px-3 py-2 text-sm ${
@@ -373,7 +419,7 @@ export function DashboardClient() {
           <button
             type="submit"
             className="btn-primary w-full md:w-auto"
-            disabled={adding || quickCategories.length === 0}
+            disabled={adding || quickCategories.length === 0 || accounts.length === 0}
           >
             <Plus className="h-4 w-4" aria-hidden="true" />
             {adding ? "Добавляем" : "Добавить"}
@@ -399,6 +445,12 @@ export function DashboardClient() {
       ) : stats ? (
         <>
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <StatCard
+              label="Деньги на счетах"
+              value={formatCurrency(stats.accountBalance)}
+              icon={Landmark}
+              tone={stats.accountBalance >= 0 ? "income" : "expense"}
+            />
             <StatCard
               label="Баланс за период"
               value={formatCurrency(stats.balance)}
@@ -426,10 +478,31 @@ export function DashboardClient() {
             <StatCard
               label="Средний расход в день"
               value={formatCurrency(stats.totalExpense / periodDays)}
-              icon={Landmark}
+              icon={WalletCards}
               tone="expense"
             />
           </div>
+
+          {stats.accounts.length > 0 ? (
+            <section className="mt-6 card p-4 sm:p-5">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold text-ink">Счета</h2>
+                <Link href="/accounts" className="text-sm font-medium text-accent hover:underline">
+                  Управлять
+                </Link>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {stats.accounts.map((account) => (
+                  <div key={account.id} className="rounded-md border border-line p-3">
+                    <div className="text-sm text-muted">{account.name}</div>
+                    <div className="mt-1 text-lg font-semibold text-ink">
+                      {formatCurrency(account.balance, account.currency)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           {stats.dailyControl && stats.survival ? (
             <div className="mt-6 grid gap-4 lg:grid-cols-2">

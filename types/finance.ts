@@ -2,6 +2,7 @@ export type TransactionKind = "INCOME" | "EXPENSE";
 export type LoanState = "ACTIVE" | "PAUSED" | "CLOSED";
 export type DebtPriority = "HIGH" | "MEDIUM" | "LOW";
 export type DebtType = "BANK_LOAN" | "CREDIT_CARD" | "PERSONAL_DEBT";
+export type CurrencyCode = "RUB" | "USD" | "EUR";
 
 export type Category = {
   id: string;
@@ -23,7 +24,39 @@ export type Transaction = {
   date: string;
   description: string | null;
   categoryId: string;
+  accountId: string | null;
   category: Category;
+  account?: Account | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type Account = {
+  id: string;
+  userId?: string;
+  name: string;
+  balance: number;
+  currency: CurrencyCode;
+  createdAt?: string;
+  updatedAt?: string;
+  _count?: {
+    transactions?: number;
+    linkedLoans?: number;
+    outgoingTransfers?: number;
+    incomingTransfers?: number;
+  };
+};
+
+export type Transfer = {
+  id: string;
+  userId?: string;
+  fromAccountId: string;
+  toAccountId: string;
+  amount: number;
+  date: string;
+  description: string | null;
+  fromAccount?: Account;
+  toAccount?: Account;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -42,6 +75,8 @@ export type Loan = {
   creditLimit: number | null;
   interestRate: number | null;
   paymentDate: string | null;
+  accountId: string | null;
+  account?: Account | null;
   priority: DebtPriority;
   status: LoanState;
   payments?: LoanPayment[];
@@ -66,6 +101,8 @@ export type DashboardStats = {
   totalIncome: number;
   totalExpense: number;
   balance: number;
+  accountBalance: number;
+  accounts: Account[];
   expensesToday: number;
   expensesMonth: number;
   expensesYear: number;

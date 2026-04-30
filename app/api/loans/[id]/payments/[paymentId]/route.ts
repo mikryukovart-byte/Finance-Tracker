@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { getTransactionImpact } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
@@ -38,7 +39,7 @@ export async function DELETE(_request: Request, { params }: RouteContext) {
       return { status: 404 as const, body: { message: "Долг не найден" } };
     }
 
-    await tx.loan.update({
+    const updatedLoan = await tx.loan.update({
       where: { id: loan.id },
       data: {
         remainingAmount: loan.remainingAmount + (payment.appliedAmount ?? payment.amount)
@@ -47,11 +48,38 @@ export async function DELETE(_request: Request, { params }: RouteContext) {
     await tx.loanPayment.delete({ where: { id: payment.id } });
 
     if (payment.transactionId) {
+      const transaction = await tx.transaction.findFirst({
+        where: {
+          id: payment.transactionId,
+          userId: auth.userId
+        }
+      });
+
       await tx.transaction.deleteMany({
         where: {
           id: payment.transactionId,
           userId: auth.userId
         }
+      });
+
+      if (transaction) {
+        if (transaction.accountId) {
+          await tx.account.update({
+            where: { id: transaction.accountId },
+            data: {
+              balance: {
+                decrement: getTransactionImpact(transaction.type, transaction.amount)
+              }
+            }
+          });
+        }
+      }
+    }
+
+    if (updatedLoan.debtType === "CREDIT_CARD" && updatedLoan.accountId) {
+      await tx.account.update({
+        where: { id: updatedLoan.accountId },
+        data: { balance: -updatedLoan.remainingAmount }
       });
     }
 

@@ -52,6 +52,16 @@ async function main() {
   }
 
   const transactionCount = await prisma.transaction.count({ where: { userId } });
+  const account = await prisma.account.upsert({
+    where: { userId_name: { userId, name: "Основной счет" } },
+    create: {
+      userId,
+      name: "Основной счет",
+      balance: 0,
+      currency: "RUB"
+    },
+    update: {}
+  });
 
   if (existingCategoryCount === 0 && transactionCount === 0) {
     const salary = await prisma.category.findFirstOrThrow({
@@ -81,6 +91,7 @@ async function main() {
           type: "INCOME",
           date: inCurrentMonth(5),
           description: "Основная зарплата",
+          accountId: account.id,
           categoryId: salary.id
         },
         {
@@ -89,6 +100,7 @@ async function main() {
           type: "INCOME",
           date: daysAgo(12),
           description: "Проект для клиента",
+          accountId: account.id,
           categoryId: freelance.id
         },
         {
@@ -97,6 +109,7 @@ async function main() {
           type: "EXPENSE",
           date: new Date(),
           description: "Покупки на неделю",
+          accountId: account.id,
           categoryId: groceries.id
         },
         {
@@ -105,6 +118,7 @@ async function main() {
           type: "EXPENSE",
           date: daysAgo(2),
           description: "Такси и метро",
+          accountId: account.id,
           categoryId: transport.id
         },
         {
@@ -113,6 +127,7 @@ async function main() {
           type: "EXPENSE",
           date: inCurrentMonth(10),
           description: "Аренда",
+          accountId: account.id,
           categoryId: home.id
         },
         {
@@ -121,9 +136,16 @@ async function main() {
           type: "EXPENSE",
           date: daysAgo(20),
           description: "Кино и кафе",
+          accountId: account.id,
           categoryId: entertainment.id
         }
       ]
+    });
+    await prisma.account.update({
+      where: { id: account.id },
+      data: {
+        balance: 148100
+      }
     });
   }
 

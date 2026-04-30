@@ -23,10 +23,10 @@ export const debtTypeLabels: Record<DebtType, string> = {
   PERSONAL_DEBT: "Личный долг"
 };
 
-export function formatCurrency(value: number) {
+export function formatCurrency(value: number, currency = "RUB") {
   return new Intl.NumberFormat("ru-RU", {
     style: "currency",
-    currency: "RUB",
+    currency,
     maximumFractionDigits: 2
   }).format(value || 0);
 }

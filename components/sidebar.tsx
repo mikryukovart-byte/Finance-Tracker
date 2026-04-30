@@ -5,6 +5,7 @@ import {
   CreditCard,
   FolderTree,
   Home,
+  Landmark,
   ListChecks,
   LogOut,
   Scale,
@@ -16,6 +17,7 @@ import { usePathname } from "next/navigation";
 const navigation = [
   { href: "/", label: "Главная", icon: Home },
   { href: "/truth", label: "Правда", icon: Scale },
+  { href: "/accounts", label: "Счета", icon: Landmark },
   { href: "/operations", label: "Операции", icon: ListChecks },
   { href: "/categories", label: "Категории", icon: FolderTree },
   { href: "/loans", label: "Кредиты", icon: CreditCard },

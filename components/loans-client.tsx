@@ -17,7 +17,7 @@ import { EmptyState } from "@/components/empty-state";
 import { FieldError, Notice } from "@/components/notice";
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
-import { readErrorMessage } from "@/lib/client-api";
+import { fetchAccounts, readErrorMessage } from "@/lib/client-api";
 import {
   debtPriorityLabels,
   debtTypeLabels,
@@ -28,6 +28,7 @@ import {
   toDateInputValue
 } from "@/lib/format";
 import type {
+  Account,
   DebtPriority,
   DebtType,
   Loan,
@@ -38,6 +39,7 @@ import type {
 
 type LoanForm = {
   debtType: DebtType;
+  accountId: string;
   title: string;
   lender: string;
   initialAmount: string;
@@ -53,6 +55,7 @@ type LoanForm = {
 };
 
 type PaymentForm = {
+  accountId: string;
   amount: string;
   date: string;
   description: string;
@@ -62,6 +65,7 @@ type LoanErrors = Partial<Record<keyof LoanForm, string>>;
 
 const initialForm: LoanForm = {
   debtType: "BANK_LOAN",
+  accountId: "",
   title: "",
   lender: "",
   initialAmount: "",
@@ -76,8 +80,9 @@ const initialForm: LoanForm = {
   status: "ACTIVE"
 };
 
-function createInitialPaymentForm(): PaymentForm {
+function createInitialPaymentForm(accountId = ""): PaymentForm {
   return {
+    accountId,
     amount: "",
     date: toDateInputValue(),
     description: ""
@@ -125,6 +130,7 @@ function validateForm(form: LoanForm) {
   const fallbackPayment = form.debtType === "CREDIT_CARD" ? minimalPayment : plannedPayment;
   const payload = {
     debtType: form.debtType,
+    accountId: form.accountId || null,
     title: form.title.trim().replace(/\s+/g, " "),
     lender: form.lender.trim().replace(/\s+/g, " ") || null,
     initialAmount: parseOptionalAmount(form.initialAmount),
@@ -204,6 +210,7 @@ function validateForm(form: LoanForm) {
 
 export function LoansClient() {
   const [loans, setLoans] = useState<Loan[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [summary, setSummary] = useState<LoansResponse["summary"]>({
     totalDebt: 0,
     paymentsThisMonth: 0
@@ -244,7 +251,10 @@ export function LoansClient() {
     setMessage("");
 
     try {
-      const response = await fetch("/api/loans", { cache: "no-store" });
+      const [response, accountData] = await Promise.all([
+        fetch("/api/loans", { cache: "no-store" }),
+        fetchAccounts()
+      ]);
 
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
@@ -252,6 +262,7 @@ export function LoansClient() {
 
       const data: LoansResponse = await response.json();
       setLoans(data.loans);
+      setAccounts(accountData.accounts);
       setSummary(data.summary);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Неизвестная ошибка");
@@ -277,6 +288,7 @@ export function LoansClient() {
     setEditingId(loan.id);
     setForm({
       debtType: loan.debtType,
+      accountId: loan.accountId ?? "",
       title: loan.title,
       lender: loan.lender ?? "",
       initialAmount: loan.initialAmount ? String(loan.initialAmount) : "",
@@ -366,15 +378,15 @@ export function LoansClient() {
   function updatePaymentForm(loanId: string, patch: Partial<PaymentForm>) {
     setPaymentForms((current) => ({
       ...current,
-      [loanId]: {
-        ...(current[loanId] ?? createInitialPaymentForm()),
+        [loanId]: {
+        ...(current[loanId] ?? createInitialPaymentForm(accounts[0]?.id ?? "")),
         ...patch
       }
     }));
   }
 
   async function addPayment(loan: Loan) {
-    const paymentForm = paymentForms[loan.id] ?? createInitialPaymentForm();
+    const paymentForm = paymentForms[loan.id] ?? createInitialPaymentForm(accounts[0]?.id ?? "");
     const amount = parseAmount(paymentForm.amount);
 
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -392,6 +404,7 @@ export function LoansClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           amount,
+          accountId: paymentForm.accountId,
           date: paymentForm.date || toDateInputValue(),
           description: paymentForm.description
         })
@@ -403,7 +416,7 @@ export function LoansClient() {
 
       setPaymentForms((current) => ({
         ...current,
-        [loan.id]: createInitialPaymentForm()
+        [loan.id]: createInitialPaymentForm(accounts[0]?.id ?? "")
       }));
       await loadLoans(false);
       setMessage("Платеж добавлен и учтен как расход");
@@ -563,6 +576,30 @@ export function LoansClient() {
                 <option value="CREDIT_CARD">Кредитная карта</option>
                 <option value="PERSONAL_DEBT">Личный долг / гибкий долг</option>
               </select>
+            </div>
+
+            <div>
+              <label className="field-label" htmlFor="loanAccount">
+                Связанный счет
+              </label>
+              <select
+                id="loanAccount"
+                className="field mt-1"
+                value={form.accountId}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, accountId: event.target.value }))
+                }
+              >
+                <option value="">Не связывать</option>
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-muted">
+                Для кредитной карты связанный счет будет отражать задолженность как отрицательный баланс.
+              </p>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -790,7 +827,8 @@ export function LoansClient() {
               {loans.map((loan) => {
                 const progress = getProgress(loan);
                 const scheduledPayment = getScheduledPayment(loan);
-                const paymentForm = paymentForms[loan.id] ?? createInitialPaymentForm();
+                const paymentForm =
+                  paymentForms[loan.id] ?? createInitialPaymentForm(accounts[0]?.id ?? "");
                 const statusTone =
                   loan.status === "ACTIVE"
                     ? "bg-profit/10 text-profit"
@@ -823,6 +861,11 @@ export function LoansClient() {
                         {loan.lender ? (
                           <div className="mt-1 text-sm text-muted">
                             Кредитор: {loan.lender}
+                          </div>
+                        ) : null}
+                        {loan.account ? (
+                          <div className="mt-1 text-sm text-muted">
+                            Связанный счет: {loan.account.name}
                           </div>
                         ) : null}
 
@@ -915,7 +958,21 @@ export function LoansClient() {
                           <Plus className="h-4 w-4" aria-hidden="true" />
                           Внести сумму
                         </div>
-                        <div className="grid gap-3 lg:grid-cols-[1fr_150px_1.3fr_auto]">
+                        <div className="grid gap-3 lg:grid-cols-[1fr_1fr_150px_1.3fr_auto]">
+                          <select
+                            className="field"
+                            value={paymentForm.accountId}
+                            onChange={(event) =>
+                              updatePaymentForm(loan.id, { accountId: event.target.value })
+                            }
+                            aria-label="Счет списания платежа"
+                          >
+                            {accounts.map((account) => (
+                              <option key={account.id} value={account.id}>
+                                {account.name}
+                              </option>
+                            ))}
+                          </select>
                           <input
                             className="field"
                             min="0.01"

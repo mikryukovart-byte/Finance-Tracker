@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
+import { findOwnedAccount, getTransactionImpact } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { firstZodError, transactionSchema } from "@/lib/validation";
@@ -25,27 +26,6 @@ export async function PUT(request: Request, { params }: RouteContext) {
     return badRequest();
   }
 
-  const parsed = transactionSchema.safeParse(body);
-
-  if (!parsed.success) {
-    return NextResponse.json({ message: firstZodError(parsed.error) }, { status: 400 });
-  }
-
-  const category = await prisma.category.findFirst({
-    where: {
-      userId: auth.userId,
-      id: parsed.data.categoryId,
-      type: parsed.data.type
-    }
-  });
-
-  if (!category) {
-    return NextResponse.json(
-      { message: "Выберите категорию подходящего типа" },
-      { status: 400 }
-    );
-  }
-
   try {
     const existing = await prisma.transaction.findFirst({
       where: { id: params.id, userId: auth.userId }
@@ -55,13 +35,78 @@ export async function PUT(request: Request, { params }: RouteContext) {
       return NextResponse.json({ message: "Операция не найдена" }, { status: 404 });
     }
 
-    const transaction = await prisma.transaction.update({
-      where: { id: params.id },
-      data: {
-        ...parsed.data,
-        userId: auth.userId
-      },
-      include: { category: true }
+    const parsed = transactionSchema.safeParse(body);
+
+    if (!parsed.success) {
+      return NextResponse.json({ message: firstZodError(parsed.error) }, { status: 400 });
+    }
+
+    const account = await findOwnedAccount(auth.userId, parsed.data.accountId);
+
+    if (!account) {
+      return NextResponse.json({ message: "Выберите существующий счет" }, { status: 400 });
+    }
+
+    const category = await prisma.category.findFirst({
+      where: {
+        userId: auth.userId,
+        id: parsed.data.categoryId,
+        type: parsed.data.type
+      }
+    });
+
+    if (!category) {
+      return NextResponse.json(
+        { message: "Выберите категорию подходящего типа" },
+        { status: 400 }
+      );
+    }
+
+    const transaction = await prisma.$transaction(async (tx) => {
+      if (existing.accountId !== parsed.data.accountId) {
+        if (existing.accountId) {
+          await tx.account.update({
+            where: { id: existing.accountId },
+            data: {
+              balance: {
+                decrement: getTransactionImpact(existing.type, existing.amount)
+              }
+            }
+          });
+        }
+        await tx.account.update({
+          where: { id: parsed.data.accountId },
+          data: {
+            balance: {
+              increment: getTransactionImpact(parsed.data.type, parsed.data.amount)
+            }
+          }
+        });
+      } else {
+        const difference =
+          getTransactionImpact(parsed.data.type, parsed.data.amount) -
+          getTransactionImpact(existing.type, existing.amount);
+
+        if (difference !== 0) {
+          await tx.account.update({
+            where: { id: parsed.data.accountId },
+            data: {
+              balance: {
+                increment: difference
+              }
+            }
+          });
+        }
+      }
+
+      return tx.transaction.update({
+        where: { id: params.id },
+        data: {
+          ...parsed.data,
+          userId: auth.userId
+        },
+        include: { category: true, account: true }
+      });
     });
 
     return NextResponse.json(transaction);
@@ -90,7 +135,19 @@ export async function DELETE(_request: Request, { params }: RouteContext) {
       return NextResponse.json({ message: "Операция не найдена" }, { status: 404 });
     }
 
-    await prisma.transaction.delete({ where: { id: params.id } });
+    await prisma.$transaction(async (tx) => {
+      await tx.transaction.delete({ where: { id: params.id } });
+      if (existing.accountId) {
+        await tx.account.update({
+          where: { id: existing.accountId },
+          data: {
+            balance: {
+              decrement: getTransactionImpact(existing.type, existing.amount)
+            }
+          }
+        });
+      }
+    });
     return NextResponse.json({ ok: true });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {

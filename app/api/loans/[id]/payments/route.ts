@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
+import { findOwnedAccount, getTransactionImpact } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { firstZodError, loanPaymentSchema } from "@/lib/validation";
@@ -70,6 +71,18 @@ export async function POST(request: Request, { params }: RouteContext) {
       return { status: 404 as const, body: { message: "Долг не найден" } };
     }
 
+    const account = await findOwnedAccount(
+      auth.userId,
+      typeof (body as Record<string, unknown>).accountId === "string"
+        ? ((body as Record<string, unknown>).accountId as string)
+        : undefined,
+      tx
+    );
+
+    if (!account) {
+      return { status: 400 as const, body: { message: "Выберите существующий счет" } };
+    }
+
     const category = await getDebtCategory(tx, auth.userId);
     const description =
       parsed.data.description?.trim() || `Платеж по долгу: ${loan.title}`;
@@ -77,11 +90,20 @@ export async function POST(request: Request, { params }: RouteContext) {
     const transaction = await tx.transaction.create({
       data: {
         userId: auth.userId,
+        accountId: account.id,
         amount: parsed.data.amount,
         type: "EXPENSE",
         date: parsed.data.date,
         description,
         categoryId: category.id
+      }
+    });
+    await tx.account.update({
+      where: { id: account.id },
+      data: {
+        balance: {
+          increment: getTransactionImpact("EXPENSE", parsed.data.amount)
+        }
       }
     });
 
@@ -109,6 +131,13 @@ export async function POST(request: Request, { params }: RouteContext) {
         }
       }
     });
+
+    if (updatedLoan.debtType === "CREDIT_CARD" && updatedLoan.accountId) {
+      await tx.account.update({
+        where: { id: updatedLoan.accountId },
+        data: { balance: -updatedLoan.remainingAmount }
+      });
+    }
 
     return {
       status: 201 as const,

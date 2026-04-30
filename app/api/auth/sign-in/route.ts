@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
+import { ensureDefaultAccount } from "@/lib/accounts";
 import { setAuthCookies, supabaseAuthFetch } from "@/lib/auth";
 import { ensureDefaultCategories } from "@/lib/default-categories";
 
@@ -30,6 +31,7 @@ export async function POST(request: Request) {
 
   if (data?.user?.id) {
     await ensureDefaultCategories(data.user.id);
+    await ensureDefaultAccount(data.user.id);
   }
 
   const result = NextResponse.json({ ok: true });

@@ -1,0 +1,664 @@
+"use client";
+
+import { ArrowRightLeft, Check, Pencil, Plus, Trash2, X } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+
+import { EmptyState } from "@/components/empty-state";
+import { FieldError, Notice } from "@/components/notice";
+import { PageHeader } from "@/components/page-header";
+import { StatCard } from "@/components/stat-card";
+import { fetchAccounts, readErrorMessage } from "@/lib/client-api";
+import { formatCurrency, formatDate, toDateInputValue } from "@/lib/format";
+import type { Account, CurrencyCode, Transfer } from "@/types/finance";
+
+type AccountForm = {
+  name: string;
+  balance: string;
+  currency: CurrencyCode;
+};
+
+type TransferForm = {
+  fromAccountId: string;
+  toAccountId: string;
+  amount: string;
+  date: string;
+  description: string;
+};
+
+type AdjustmentForm = {
+  accountId: string;
+  balance: string;
+  date: string;
+  description: string;
+};
+
+type FormErrors = Partial<Record<keyof AccountForm | keyof TransferForm | "adjustment", string>>;
+
+const initialAccountForm: AccountForm = {
+  name: "",
+  balance: "0",
+  currency: "RUB"
+};
+
+function parseAmount(value: string) {
+  return Number(value.trim().replace(/\s/g, "").replace(",", "."));
+}
+
+function createTransferForm(accounts: Account[]): TransferForm {
+  return {
+    fromAccountId: accounts[0]?.id ?? "",
+    toAccountId: accounts[1]?.id ?? accounts[0]?.id ?? "",
+    amount: "",
+    date: toDateInputValue(),
+    description: ""
+  };
+}
+
+function createAdjustmentForm(accounts: Account[]): AdjustmentForm {
+  return {
+    accountId: accounts[0]?.id ?? "",
+    balance: "",
+    date: toDateInputValue(),
+    description: ""
+  };
+}
+
+export function AccountsClient() {
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [transfers, setTransfers] = useState<Transfer[]>([]);
+  const [form, setForm] = useState<AccountForm>(initialAccountForm);
+  const [transferForm, setTransferForm] = useState<TransferForm>(() => createTransferForm([]));
+  const [adjustmentForm, setAdjustmentForm] = useState<AdjustmentForm>(() =>
+    createAdjustmentForm([])
+  );
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [errors, setErrors] = useState<FormErrors>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [messageTone, setMessageTone] = useState<"neutral" | "success" | "error">("neutral");
+
+  const totalBalance = useMemo(
+    () => accounts.reduce((sum, account) => sum + account.balance, 0),
+    [accounts]
+  );
+
+  async function loadData(showLoader = true) {
+    if (showLoader) {
+      setLoading(true);
+    }
+    setMessage("");
+
+    try {
+      const [accountData, transferResponse] = await Promise.all([
+        fetchAccounts(),
+        fetch("/api/transfers", { cache: "no-store" })
+      ]);
+
+      if (!transferResponse.ok) {
+        throw new Error(await readErrorMessage(transferResponse));
+      }
+
+      const nextAccounts = accountData.accounts;
+      setAccounts(nextAccounts);
+      setTransfers(await transferResponse.json());
+      setTransferForm((current) => ({
+        ...createTransferForm(nextAccounts),
+        ...current,
+        fromAccountId: nextAccounts.some((account) => account.id === current.fromAccountId)
+          ? current.fromAccountId
+          : nextAccounts[0]?.id ?? "",
+        toAccountId: nextAccounts.some((account) => account.id === current.toAccountId)
+          ? current.toAccountId
+          : nextAccounts[1]?.id ?? nextAccounts[0]?.id ?? ""
+      }));
+      setAdjustmentForm((current) => ({
+        ...current,
+        accountId: nextAccounts.some((account) => account.id === current.accountId)
+          ? current.accountId
+          : nextAccounts[0]?.id ?? ""
+      }));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Не удалось загрузить счета");
+      setMessageTone("error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  function resetForm() {
+    setForm(initialAccountForm);
+    setEditingId(null);
+    setErrors({});
+  }
+
+  function editAccount(account: Account) {
+    setEditingId(account.id);
+    setForm({
+      name: account.name,
+      balance: String(account.balance),
+      currency: account.currency
+    });
+    setErrors({});
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function saveAccount(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage("");
+    const nextErrors: FormErrors = {};
+    const balance = parseAmount(form.balance);
+
+    if (form.name.trim().length < 2) {
+      nextErrors.name = "Название должно быть не короче 2 символов";
+    }
+
+    if (!Number.isFinite(balance)) {
+      nextErrors.balance = "Введите корректный баланс";
+    }
+
+    setErrors(nextErrors);
+
+    if (Object.keys(nextErrors).length > 0) {
+      setMessage("Проверьте поля формы");
+      setMessageTone("error");
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      const response = await fetch(editingId ? `/api/accounts/${editingId}` : "/api/accounts", {
+        method: editingId ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: form.name,
+          balance,
+          currency: form.currency
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      await loadData(false);
+      resetForm();
+      setMessage(editingId ? "Счет обновлен" : "Счет создан");
+      setMessageTone("success");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Не удалось сохранить счет");
+      setMessageTone("error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteAccount(account: Account) {
+    const confirmed = window.confirm(`Удалить счет «${account.name}»?`);
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/accounts/${account.id}`, { method: "DELETE" });
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      await loadData(false);
+      setMessage("Счет удален");
+      setMessageTone("success");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Не удалось удалить счет");
+      setMessageTone("error");
+    }
+  }
+
+  async function saveTransfer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const amount = parseAmount(transferForm.amount);
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setMessage("Введите сумму перевода больше нуля");
+      setMessageTone("error");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/transfers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...transferForm,
+          amount
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      await loadData(false);
+      setTransferForm(createTransferForm(accounts));
+      setMessage("Перевод выполнен");
+      setMessageTone("success");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Не удалось выполнить перевод");
+      setMessageTone("error");
+    }
+  }
+
+  async function adjustBalance(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const balance = parseAmount(adjustmentForm.balance);
+
+    if (!adjustmentForm.accountId || !Number.isFinite(balance)) {
+      setMessage("Выберите счет и укажите новый баланс");
+      setMessageTone("error");
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/accounts/${adjustmentForm.accountId}/adjust`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          balance,
+          date: adjustmentForm.date,
+          description: adjustmentForm.description
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      await loadData(false);
+      setAdjustmentForm(createAdjustmentForm(accounts));
+      setMessage("Баланс скорректирован");
+      setMessageTone("success");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Не удалось скорректировать баланс");
+      setMessageTone("error");
+    }
+  }
+
+  return (
+    <div>
+      <PageHeader title="Счета" description="Баланс по счетам, наличным и картам." />
+
+      <div className="mb-6 grid gap-4 md:grid-cols-2">
+        <StatCard
+          label="Общий баланс"
+          value={formatCurrency(totalBalance)}
+          icon={ArrowRightLeft}
+          tone={totalBalance >= 0 ? "income" : "expense"}
+        />
+        <StatCard
+          label="Счетов"
+          value={String(accounts.length)}
+          icon={Check}
+          tone="neutral"
+        />
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[420px_1fr]">
+        <section className="space-y-6">
+          <div className="card p-4 sm:p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold text-ink">
+                {editingId ? "Редактирование счета" : "Новый счет"}
+              </h2>
+              {editingId ? (
+                <button type="button" className="btn-secondary" onClick={resetForm}>
+                  <X className="h-4 w-4" aria-hidden="true" />
+                  Отмена
+                </button>
+              ) : null}
+            </div>
+
+            <form className="space-y-4" onSubmit={saveAccount}>
+              <div>
+                <label className="field-label" htmlFor="accountName">
+                  Название
+                </label>
+                <input
+                  id="accountName"
+                  className="field mt-1"
+                  value={form.name}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, name: event.target.value }))
+                  }
+                  placeholder="Например, Tinkoff, Наличные"
+                />
+                <FieldError message={errors.name} />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="field-label" htmlFor="accountBalance">
+                    Начальный баланс
+                  </label>
+                  <input
+                    id="accountBalance"
+                    className="field mt-1"
+                    disabled={Boolean(editingId)}
+                    inputMode="decimal"
+                    value={form.balance}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, balance: event.target.value }))
+                    }
+                    placeholder="0"
+                  />
+                  <p className="mt-1 text-xs text-muted">
+                    После создания баланс меняется через корректировку.
+                  </p>
+                  <FieldError message={errors.balance} />
+                </div>
+
+                <div>
+                  <label className="field-label" htmlFor="accountCurrency">
+                    Валюта
+                  </label>
+                  <select
+                    id="accountCurrency"
+                    className="field mt-1"
+                    value={form.currency}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        currency: event.target.value as CurrencyCode
+                      }))
+                    }
+                  >
+                    <option value="RUB">RUB</option>
+                    <option value="USD">USD</option>
+                    <option value="EUR">EUR</option>
+                  </select>
+                </div>
+              </div>
+
+              <Notice message={message} tone={messageTone} />
+
+              <button type="submit" className="btn-primary w-full" disabled={saving}>
+                {editingId ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                {saving ? "Сохранение" : editingId ? "Сохранить" : "Создать счет"}
+              </button>
+            </form>
+          </div>
+
+          <div className="card p-4 sm:p-5">
+            <h2 className="mb-4 text-lg font-semibold text-ink">Перевод между счетами</h2>
+            <form className="space-y-4" onSubmit={saveTransfer}>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="field-label" htmlFor="fromAccount">
+                    Откуда
+                  </label>
+                  <select
+                    id="fromAccount"
+                    className="field mt-1"
+                    value={transferForm.fromAccountId}
+                    onChange={(event) =>
+                      setTransferForm((current) => ({
+                        ...current,
+                        fromAccountId: event.target.value
+                      }))
+                    }
+                  >
+                    {accounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="field-label" htmlFor="toAccount">
+                    Куда
+                  </label>
+                  <select
+                    id="toAccount"
+                    className="field mt-1"
+                    value={transferForm.toAccountId}
+                    onChange={(event) =>
+                      setTransferForm((current) => ({
+                        ...current,
+                        toAccountId: event.target.value
+                      }))
+                    }
+                  >
+                    {accounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="field-label" htmlFor="transferAmount">
+                    Сумма
+                  </label>
+                  <input
+                    id="transferAmount"
+                    className="field mt-1"
+                    inputMode="decimal"
+                    value={transferForm.amount}
+                    onChange={(event) =>
+                      setTransferForm((current) => ({ ...current, amount: event.target.value }))
+                    }
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <label className="field-label" htmlFor="transferDate">
+                    Дата
+                  </label>
+                  <input
+                    id="transferDate"
+                    className="field mt-1"
+                    type="date"
+                    value={transferForm.date}
+                    onChange={(event) =>
+                      setTransferForm((current) => ({ ...current, date: event.target.value }))
+                    }
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="field-label" htmlFor="transferDescription">
+                  Комментарий
+                </label>
+                <input
+                  id="transferDescription"
+                  className="field mt-1"
+                  value={transferForm.description}
+                  onChange={(event) =>
+                    setTransferForm((current) => ({
+                      ...current,
+                      description: event.target.value
+                    }))
+                  }
+                  placeholder="Необязательно"
+                />
+              </div>
+              <button type="submit" className="btn-secondary w-full" disabled={accounts.length < 2}>
+                Перевести
+              </button>
+            </form>
+          </div>
+
+          <div className="card p-4 sm:p-5">
+            <h2 className="mb-4 text-lg font-semibold text-ink">Корректировка баланса</h2>
+            <form className="space-y-4" onSubmit={adjustBalance}>
+              <div>
+                <label className="field-label" htmlFor="adjustAccount">
+                  Счет
+                </label>
+                <select
+                  id="adjustAccount"
+                  className="field mt-1"
+                  value={adjustmentForm.accountId}
+                  onChange={(event) =>
+                    setAdjustmentForm((current) => ({
+                      ...current,
+                      accountId: event.target.value
+                    }))
+                  }
+                >
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="field-label" htmlFor="adjustBalance">
+                    Новый баланс
+                  </label>
+                  <input
+                    id="adjustBalance"
+                    className="field mt-1"
+                    inputMode="decimal"
+                    value={adjustmentForm.balance}
+                    onChange={(event) =>
+                      setAdjustmentForm((current) => ({
+                        ...current,
+                        balance: event.target.value
+                      }))
+                    }
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <label className="field-label" htmlFor="adjustDate">
+                    Дата
+                  </label>
+                  <input
+                    id="adjustDate"
+                    className="field mt-1"
+                    type="date"
+                    value={adjustmentForm.date}
+                    onChange={(event) =>
+                      setAdjustmentForm((current) => ({
+                        ...current,
+                        date: event.target.value
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="field-label" htmlFor="adjustDescription">
+                  Комментарий
+                </label>
+                <input
+                  id="adjustDescription"
+                  className="field mt-1"
+                  value={adjustmentForm.description}
+                  onChange={(event) =>
+                    setAdjustmentForm((current) => ({
+                      ...current,
+                      description: event.target.value
+                    }))
+                  }
+                  placeholder="Например, сверка с банком"
+                />
+              </div>
+              <button type="submit" className="btn-secondary w-full">
+                Создать корректировку
+              </button>
+            </form>
+          </div>
+        </section>
+
+        <section className="min-w-0 space-y-4">
+          {loading ? (
+            <>
+              <p className="text-sm text-muted">Загрузка...</p>
+              <div className="card h-80 animate-pulse bg-soft/50" />
+            </>
+          ) : accounts.length === 0 ? (
+            <EmptyState text="Счетов пока нет" />
+          ) : (
+            <div className="grid gap-4">
+              {accounts.map((account) => (
+                <article key={account.id} className="card p-4 sm:p-5">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h2 className="text-lg font-semibold text-ink">{account.name}</h2>
+                      <div className="mt-1 text-sm text-muted">{account.currency}</div>
+                      <div className="mt-4 text-2xl font-semibold text-ink">
+                        {formatCurrency(account.balance, account.currency)}
+                      </div>
+                      <div className="mt-3 text-sm text-muted">
+                        Операций: {account._count?.transactions ?? 0}
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        className="btn-secondary px-2"
+                        onClick={() => editAccount(account)}
+                        aria-label="Редактировать счет"
+                        title="Редактировать"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-danger px-2"
+                        onClick={() => deleteAccount(account)}
+                        aria-label="Удалить счет"
+                        title="Удалить"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+
+          <section className="card p-4 sm:p-5">
+            <h2 className="mb-4 text-lg font-semibold text-ink">Последние переводы</h2>
+            {transfers.length === 0 ? (
+              <EmptyState text="Переводов пока нет" />
+            ) : (
+              <div className="divide-y divide-line overflow-hidden rounded-md border border-line">
+                {transfers.map((transfer) => (
+                  <div key={transfer.id} className="px-3 py-3 text-sm hover:bg-hover">
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="font-medium text-ink">
+                        {transfer.fromAccount?.name} {"->"} {transfer.toAccount?.name}
+                      </div>
+                      <div className="font-semibold text-ink">
+                        {formatCurrency(transfer.amount)}
+                      </div>
+                    </div>
+                    <div className="mt-1 text-xs text-muted">
+                      {formatDate(transfer.date)}
+                      {transfer.description ? ` · ${transfer.description}` : ""}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </section>
+      </div>
+    </div>
+  );
+}

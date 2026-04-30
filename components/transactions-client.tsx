@@ -22,15 +22,17 @@ import { QuickTransactionInput } from "@/components/quick-transaction-input";
 import { StatCard } from "@/components/stat-card";
 import {
   buildQuery,
+  fetchAccounts,
   fetchCategories,
   invalidateCategoriesCache,
   readErrorMessage
 } from "@/lib/client-api";
 import { formatCurrency, formatDate, toDateInputValue, typeLabels } from "@/lib/format";
 import { buildPeriodQuery, createPeriodState, describePeriod } from "@/lib/period";
-import type { Category, Transaction, TransactionKind } from "@/types/finance";
+import type { Account, Category, Transaction, TransactionKind } from "@/types/finance";
 
 type TransactionForm = {
+  accountId: string;
   amount: string;
   categoryId: string;
   date: string;
@@ -58,8 +60,9 @@ const defaultFilters: TransactionFilters = {
   sortDir: "desc"
 };
 
-function createInitialForm(categoryId = ""): TransactionForm {
+function createInitialForm(categoryId = "", accountId = ""): TransactionForm {
   return {
+    accountId,
     amount: "",
     categoryId,
     date: toDateInputValue(),
@@ -80,6 +83,10 @@ function validateForm(form: TransactionForm) {
     errors.categoryId = "Выберите категорию";
   }
 
+  if (!form.accountId) {
+    errors.accountId = "Выберите счет";
+  }
+
   if (!form.date) {
     errors.date = "Укажите дату";
   }
@@ -93,6 +100,7 @@ function validateForm(form: TransactionForm) {
 
 export function TransactionsClient() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [form, setForm] = useState<TransactionForm>(() => createInitialForm());
   const [filters, setFilters] = useState<TransactionFilters>(defaultFilters);
@@ -100,6 +108,7 @@ export function TransactionsClient() {
   const [errors, setErrors] = useState<FormErrors>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [accountsLoading, setAccountsLoading] = useState(true);
   const [categoriesLoading, setCategoriesLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -160,21 +169,39 @@ export function TransactionsClient() {
   }, [filters, period]);
 
   useEffect(() => {
-    async function loadCategories() {
+    async function loadDictionaries() {
       setCategoriesLoading(true);
+      setAccountsLoading(true);
 
       try {
-        setCategories(await fetchCategories());
+        const [categoryData, accountData] = await Promise.all([
+          fetchCategories(),
+          fetchAccounts()
+        ]);
+        setCategories(categoryData);
+        setAccounts(accountData.accounts);
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "Неизвестная ошибка");
         setMessageTone("error");
       } finally {
         setCategoriesLoading(false);
+        setAccountsLoading(false);
       }
     }
 
-    loadCategories();
+    loadDictionaries();
   }, []);
+
+  useEffect(() => {
+    if (accounts.length === 0) {
+      setForm((current) => ({ ...current, accountId: "" }));
+      return;
+    }
+
+    if (!accounts.some((account) => account.id === form.accountId)) {
+      setForm((current) => ({ ...current, accountId: accounts[0].id }));
+    }
+  }, [accounts, form.accountId]);
 
   useEffect(() => {
     loadTransactions();
@@ -205,7 +232,7 @@ export function TransactionsClient() {
       nextCategoryId ??
       categories.find((category) => category.type === "EXPENSE")?.id ??
       "";
-    setForm(createInitialForm(expenseCategory));
+    setForm(createInitialForm(expenseCategory, accounts[0]?.id ?? ""));
     setEditingId(null);
     setErrors({});
   }
@@ -213,6 +240,7 @@ export function TransactionsClient() {
   function editTransaction(transaction: Transaction) {
     setEditingId(transaction.id);
     setForm({
+      accountId: transaction.accountId ?? "",
       amount: String(transaction.amount),
       categoryId: transaction.categoryId,
       date: toDateInputValue(transaction.date),
@@ -240,6 +268,7 @@ export function TransactionsClient() {
 
     const payload = {
       amount: validation.amount,
+      accountId: form.accountId,
       categoryId: form.categoryId,
       date: form.date,
       description: form.description,
@@ -260,6 +289,8 @@ export function TransactionsClient() {
       }
 
       invalidateCategoriesCache();
+      const accountData = await fetchAccounts();
+      setAccounts(accountData.accounts);
       await loadTransactions();
 
       if (editingId) {
@@ -301,6 +332,8 @@ export function TransactionsClient() {
       }
 
       invalidateCategoriesCache();
+      const accountData = await fetchAccounts();
+      setAccounts(accountData.accounts);
       await loadTransactions();
       if (editingId === id) {
         resetForm();
@@ -447,6 +480,43 @@ export function TransactionsClient() {
             </div>
 
             <div>
+              <div className="flex items-center justify-between gap-3">
+                <label className="field-label" htmlFor="accountId">
+                  Счет
+                </label>
+                <Link href="/accounts" className="text-sm font-medium text-accent hover:underline">
+                  Счета
+                </Link>
+              </div>
+              {accounts.length === 0 && !accountsLoading ? (
+                <div className="mt-1 rounded-md border border-dashed border-line bg-paper/40 px-3 py-3 text-sm text-muted">
+                  Создайте счет, чтобы добавить операцию.
+                </div>
+              ) : (
+                <select
+                  id="accountId"
+                  className="field mt-1"
+                  value={form.accountId}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, accountId: event.target.value }))
+                  }
+                  disabled={accountsLoading}
+                >
+                  {accountsLoading ? (
+                    <option value="">Загрузка счетов</option>
+                  ) : (
+                    accounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name} · {formatCurrency(account.balance, account.currency)}
+                      </option>
+                    ))
+                  )}
+                </select>
+              )}
+              <FieldError message={errors.accountId} />
+            </div>
+
+            <div>
               <label className="field-label" htmlFor="date">
                 Дата
               </label>
@@ -483,7 +553,13 @@ export function TransactionsClient() {
             <button
               type="submit"
               className="btn-primary w-full"
-              disabled={saving || categoriesLoading || formCategories.length === 0}
+              disabled={
+                saving ||
+                categoriesLoading ||
+                accountsLoading ||
+                formCategories.length === 0 ||
+                accounts.length === 0
+              }
             >
               {editingId ? (
                 <Check className="h-4 w-4" aria-hidden="true" />
@@ -610,12 +686,13 @@ export function TransactionsClient() {
             <EmptyState text="Операций по выбранным условиям нет" />
           ) : (
             <div className="table-wrap overflow-x-auto">
-              <table className="table-base min-w-[840px]">
+              <table className="table-base min-w-[940px]">
                 <thead>
                   <tr>
                     <th>Дата</th>
                     <th>Тип</th>
                     <th>Категория</th>
+                    <th>Счет</th>
                     <th>Описание</th>
                     <th className="text-right">Сумма</th>
                     <th className="text-right">Действия</th>
@@ -637,6 +714,7 @@ export function TransactionsClient() {
                         </span>
                       </td>
                       <td className="font-medium text-ink">{transaction.category.name}</td>
+                      <td className="text-muted">{transaction.account?.name ?? "Счет"}</td>
                       <td className="max-w-72 truncate text-muted">
                         {transaction.description || "Без описания"}
                       </td>

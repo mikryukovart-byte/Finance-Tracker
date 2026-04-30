@@ -1,4 +1,4 @@
-import type { Category } from "@/types/finance";
+import type { Account, Category } from "@/types/finance";
 
 const categoriesCacheTtlMs = 15_000;
 let categoriesCache:
@@ -55,6 +55,17 @@ export function setCachedCategories(categories: Category[]) {
 export function invalidateCategoriesCache() {
   categoriesCache = null;
   categoriesRequest = null;
+}
+
+export async function fetchAccounts() {
+  const response = await fetch("/api/accounts", { cache: "no-store" });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  const data: { accounts: Account[]; totalBalance: number } = await response.json();
+  return data;
 }
 
 export function buildQuery(params: Record<string, string>) {

@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
+import { findOwnedAccount } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { firstZodError, loanSchema } from "@/lib/validation";
@@ -38,6 +39,7 @@ function normalizeLoanBody(body: Record<string, unknown>) {
     creditLimit: body.creditLimit ?? (debtType === "CREDIT_CARD" ? totalAmount : null),
     interestRate: body.interestRate ?? null,
     paymentDate: body.paymentDate ?? null,
+    accountId: body.accountId ?? null,
     priority: body.priority ?? "MEDIUM",
     status: body.status ?? "ACTIVE"
   };
@@ -71,18 +73,38 @@ export async function PUT(request: Request, { params }: RouteContext) {
       return NextResponse.json({ message: "Кредит не найден" }, { status: 404 });
     }
 
-    const loan = await prisma.loan.update({
-      where: { id: params.id },
-      data: {
-        ...parsed.data,
-        userId: auth.userId
-      },
-      include: {
-        payments: {
-          orderBy: [{ date: "desc" }, { createdAt: "desc" }],
-          take: 8
-        }
+    if (parsed.data.accountId) {
+      const account = await findOwnedAccount(auth.userId, parsed.data.accountId);
+
+      if (!account) {
+        return NextResponse.json({ message: "Выберите существующий счет" }, { status: 400 });
       }
+    }
+
+    const loan = await prisma.$transaction(async (tx) => {
+      const saved = await tx.loan.update({
+        where: { id: params.id },
+        data: {
+          ...parsed.data,
+          userId: auth.userId
+        },
+        include: {
+          account: true,
+          payments: {
+            orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+            take: 8
+          }
+        }
+      });
+
+      if (saved.debtType === "CREDIT_CARD" && saved.accountId) {
+        await tx.account.update({
+          where: { id: saved.accountId },
+          data: { balance: -saved.remainingAmount }
+        });
+      }
+
+      return saved;
     });
 
     return NextResponse.json(loan);

@@ -22,6 +22,11 @@ const debtPrioritySchema = z.enum(["HIGH", "MEDIUM", "LOW"], {
   invalid_type_error: "Некорректный приоритет"
 });
 
+const currencySchema = z.enum(["RUB", "USD", "EUR"], {
+  required_error: "Укажите валюту",
+  invalid_type_error: "Некорректная валюта"
+});
+
 function normalizeMoney(value: unknown) {
   if (typeof value === "string") {
     const trimmed = value.trim().replace(/\s/g, "").replace(",", ".");
@@ -99,8 +104,54 @@ export const categorySchema = z.object({
   type: transactionTypeSchema
 });
 
+export const accountSchema = z.object({
+  name: z
+    .string({ required_error: "Укажите название счета" })
+    .trim()
+    .min(2, "Название должно быть не короче 2 символов")
+    .max(60, "Название должно быть короче 60 символов")
+    .transform((value) => value.replace(/\s+/g, " ")),
+  balance: moneySchema("Укажите баланс"),
+  currency: currencySchema.default("RUB")
+});
+
+export const transferSchema = z
+  .object({
+    fromAccountId: z.string().min(1, "Выберите счет списания"),
+    toAccountId: z.string().min(1, "Выберите счет зачисления"),
+    amount: positiveMoneySchema("Сумма перевода должна быть больше нуля"),
+    date: dateSchema,
+    description: z
+      .string()
+      .trim()
+      .max(180, "Комментарий должен быть короче 180 символов")
+      .optional()
+      .transform((value) => value || null)
+  })
+  .superRefine((value, context) => {
+    if (value.fromAccountId === value.toAccountId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["toAccountId"],
+        message: "Выберите разные счета"
+      });
+    }
+  });
+
+export const balanceAdjustmentSchema = z.object({
+  balance: moneySchema("Укажите новый баланс"),
+  date: dateSchema,
+  description: z
+    .string()
+    .trim()
+    .max(180, "Комментарий должен быть короче 180 символов")
+    .optional()
+    .transform((value) => value || null)
+});
+
 export const transactionSchema = z.object({
   amount: positiveMoneySchema("Сумма должна быть больше нуля"),
+  accountId: z.string().min(1, "Выберите счет"),
   categoryId: z.string().min(1, "Выберите категорию"),
   date: dateSchema,
   description: z
@@ -142,6 +193,12 @@ export const loanSchema = z
       "Процент не должен быть больше 100"
     ),
     paymentDate: optionalDateSchema,
+    accountId: z
+      .preprocess(
+        (value) => (value === "" || value === null ? undefined : value),
+        z.string().min(1, "Выберите счет").optional()
+      )
+      .transform((value) => value ?? null),
     priority: debtPrioritySchema.default("MEDIUM"),
     status: loanStatusSchema
   })
@@ -197,6 +254,16 @@ export const backupImportSchema = z.object({
       type: transactionTypeSchema
     })
   ),
+  accounts: z
+    .array(
+      z.object({
+        id: z.string().optional(),
+        name: z.string().trim().min(2),
+        balance: moneySchema("Укажите баланс"),
+        currency: currencySchema.default("RUB")
+      })
+    )
+    .optional(),
   transactions: z.array(
     z.object({
       id: z.string().optional(),
@@ -204,7 +271,8 @@ export const backupImportSchema = z.object({
       type: transactionTypeSchema,
       date: dateSchema,
       description: z.string().nullable().optional(),
-      categoryId: z.string()
+      categoryId: z.string(),
+      accountId: z.string().nullable().optional()
     })
   ),
   loans: z.array(
@@ -224,6 +292,7 @@ export const backupImportSchema = z.object({
         "Процент не должен быть больше 100"
       ),
       paymentDate: optionalDateSchema,
+      accountId: z.string().nullable().optional(),
       priority: debtPrioritySchema.default("MEDIUM"),
       status: loanStatusSchema
     })
@@ -238,6 +307,18 @@ export const backupImportSchema = z.object({
         date: dateSchema,
         description: z.string().nullable().optional(),
         transactionId: z.string().nullable().optional()
+      })
+    )
+    .optional(),
+  transfers: z
+    .array(
+      z.object({
+        id: z.string().optional(),
+        fromAccountId: z.string(),
+        toAccountId: z.string(),
+        amount: positiveMoneySchema("Сумма перевода должна быть больше нуля"),
+        date: dateSchema,
+        description: z.string().nullable().optional()
       })
     )
     .optional()
