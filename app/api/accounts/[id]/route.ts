@@ -2,7 +2,6 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
-import { getCreditCardBalance } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { accountSchema, firstZodError } from "@/lib/validation";
@@ -41,22 +40,29 @@ export async function PUT(request: Request, { params }: RouteContext) {
   }
 
   try {
-    const currentDebt =
-      parsed.data.type === "CREDIT_CARD" ? parsed.data.currentDebt ?? existing.currentDebt : 0;
+    if (
+      existing.type === "CREDIT_CARD" &&
+      parsed.data.creditLimit &&
+      existing.currentDebt > parsed.data.creditLimit
+    ) {
+      return NextResponse.json(
+        { message: "Лимит не может быть меньше текущего долга" },
+        { status: 400 }
+      );
+    }
+
     const account = await prisma.account.update({
       where: { id: params.id },
       data: {
         name: parsed.data.name,
-        type: parsed.data.type,
         currency: parsed.data.currency,
-        balance:
-          parsed.data.type === "CREDIT_CARD"
-            ? getCreditCardBalance(currentDebt)
-            : parsed.data.balance,
-        creditLimit: parsed.data.type === "CREDIT_CARD" ? parsed.data.creditLimit : null,
-        currentDebt,
-        minimalPayment: parsed.data.type === "CREDIT_CARD" ? parsed.data.minimalPayment : null,
-        paymentDate: parsed.data.type === "CREDIT_CARD" ? parsed.data.paymentDate : null
+        creditLimit:
+          existing.type === "CREDIT_CARD"
+            ? parsed.data.creditLimit ?? existing.creditLimit
+            : null,
+        minimalPayment:
+          existing.type === "CREDIT_CARD" ? parsed.data.minimalPayment : null,
+        paymentDate: existing.type === "CREDIT_CARD" ? parsed.data.paymentDate : null
       },
       include: {
         _count: {

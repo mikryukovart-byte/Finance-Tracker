@@ -131,6 +131,20 @@ export function DashboardClient() {
   }, [loadCategories, loadStats]);
 
   useEffect(() => {
+    async function refreshFinancialData() {
+      await Promise.all([loadStats(false), loadCategories()]);
+    }
+
+    window.addEventListener("finance-data-changed", refreshFinancialData);
+    window.addEventListener("finance-data-reset", refreshFinancialData);
+
+    return () => {
+      window.removeEventListener("finance-data-changed", refreshFinancialData);
+      window.removeEventListener("finance-data-reset", refreshFinancialData);
+    };
+  }, [loadCategories, loadStats]);
+
+  useEffect(() => {
     amountInputRef.current?.focus();
   }, []);
 

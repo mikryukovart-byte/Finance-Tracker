@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowRightLeft, Check, Pencil, Plus, Trash2, X } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { EmptyState } from "@/components/empty-state";
 import { FieldError, Notice } from "@/components/notice";
@@ -94,15 +94,23 @@ export function AccountsClient() {
     createAdjustmentForm([])
   );
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [activeAdjustmentAccountId, setActiveAdjustmentAccountId] = useState<string>("");
   const [errors, setErrors] = useState<FormErrors>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [adjusting, setAdjusting] = useState(false);
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<"neutral" | "success" | "error">("neutral");
+  const adjustmentSectionRef = useRef<HTMLDivElement | null>(null);
+  const adjustmentBalanceInputRef = useRef<HTMLInputElement | null>(null);
 
   const totalBalance = useMemo(
     () => accounts.reduce((sum, account) => sum + account.balance, 0),
     [accounts]
+  );
+  const selectedAdjustmentAccount = useMemo(
+    () => accounts.find((account) => account.id === adjustmentForm.accountId) ?? null,
+    [accounts, adjustmentForm.accountId]
   );
 
   async function loadData(showLoader = true) {
@@ -324,6 +332,7 @@ export function AccountsClient() {
     }
 
     try {
+      setAdjusting(true);
       const response = await fetch(`/api/accounts/${adjustmentForm.accountId}/adjust`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -335,17 +344,51 @@ export function AccountsClient() {
       });
 
       if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
+        const errorMessage = await readErrorMessage(response);
+        console.error("Balance adjustment failed", {
+          status: response.status,
+          message: errorMessage
+        });
+        throw new Error(errorMessage);
       }
 
       await loadData(false);
       setAdjustmentForm(createAdjustmentForm(accounts));
+      setActiveAdjustmentAccountId("");
       setMessage("Баланс скорректирован");
       setMessageTone("success");
+      window.dispatchEvent(new Event("finance-data-changed"));
     } catch (error) {
+      console.error("Balance adjustment request error", error);
       setMessage(error instanceof Error ? error.message : "Не удалось скорректировать баланс");
       setMessageTone("error");
+    } finally {
+      setAdjusting(false);
     }
+  }
+
+  function startAdjustment(account: Account) {
+    const currentBalance = account.balance;
+    setActiveAdjustmentAccountId(account.id);
+    setAdjustmentForm((current) => ({
+      ...current,
+      accountId: account.id,
+      balance: String(currentBalance),
+      date: toDateInputValue()
+    }));
+    setMessage(`Введите желаемый баланс для счета «${account.name}»`);
+    setMessageTone("neutral");
+
+    window.requestAnimationFrame(() => {
+      adjustmentSectionRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "center"
+      });
+      window.setTimeout(() => {
+        adjustmentBalanceInputRef.current?.focus();
+        adjustmentBalanceInputRef.current?.select();
+      }, 250);
+    });
   }
 
   return (
@@ -406,6 +449,7 @@ export function AccountsClient() {
                 <select
                   id="accountType"
                   className="field mt-1"
+                  disabled={Boolean(editingId)}
                   value={form.type}
                   onChange={(event) =>
                     setForm((current) => ({
@@ -437,7 +481,7 @@ export function AccountsClient() {
                       placeholder="0"
                     />
                     <p className="mt-1 text-xs text-muted">
-                      После создания баланс меняется через корректировку.
+                      Баланс рассчитывается из операций.
                     </p>
                     <FieldError message={errors.balance} />
                   </div>
@@ -491,6 +535,7 @@ export function AccountsClient() {
                     <input
                       id="currentDebt"
                       className="field mt-1"
+                      disabled={Boolean(editingId)}
                       inputMode="decimal"
                       value={form.currentDebt}
                       onChange={(event) =>
@@ -498,6 +543,9 @@ export function AccountsClient() {
                       }
                       placeholder="0"
                     />
+                    <p className="mt-1 text-xs text-muted">
+                      Долг рассчитывается из операций и погашений.
+                    </p>
                     <FieldError message={errors.currentDebt} />
                   </div>
                   <div>
@@ -651,8 +699,14 @@ export function AccountsClient() {
             </form>
           </div>
 
-          <div className="card p-4 sm:p-5">
+          <div
+            ref={adjustmentSectionRef}
+            className={`card p-4 transition sm:p-5 ${
+              activeAdjustmentAccountId ? "ring-2 ring-accent/30" : ""
+            }`}
+          >
             <h2 className="mb-4 text-lg font-semibold text-ink">Корректировка баланса</h2>
+            <Notice message={message} tone={messageTone} />
             <form className="space-y-4" onSubmit={adjustBalance}>
               <div>
                 <label className="field-label" htmlFor="adjustAccount">
@@ -671,7 +725,7 @@ export function AccountsClient() {
                 >
                   {accounts.map((account) => (
                     <option key={account.id} value={account.id}>
-                      {account.name}
+                      {account.name} · {formatCurrency(account.balance, account.currency)}
                     </option>
                   ))}
                 </select>
@@ -679,10 +733,11 @@ export function AccountsClient() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label className="field-label" htmlFor="adjustBalance">
-                    Новый баланс
+                    Желаемый баланс
                   </label>
                   <input
                     id="adjustBalance"
+                    ref={adjustmentBalanceInputRef}
                     className="field mt-1"
                     inputMode="decimal"
                     value={adjustmentForm.balance}
@@ -694,6 +749,15 @@ export function AccountsClient() {
                     }
                     placeholder="0"
                   />
+                  {selectedAdjustmentAccount ? (
+                    <p className="mt-1 text-xs text-muted">
+                      Сейчас:{" "}
+                      {formatCurrency(
+                        selectedAdjustmentAccount.balance,
+                        selectedAdjustmentAccount.currency
+                      )}
+                    </p>
+                  ) : null}
                 </div>
                 <div>
                   <label className="field-label" htmlFor="adjustDate">
@@ -730,8 +794,12 @@ export function AccountsClient() {
                   placeholder="Например, сверка с банком"
                 />
               </div>
-              <button type="submit" className="btn-secondary w-full">
-                Создать корректировку
+              <p className="text-xs text-muted">
+                Баланс рассчитывается из операций. Корректировка создаст отдельную операцию на
+                разницу.
+              </p>
+              <button type="submit" className="btn-secondary w-full" disabled={adjusting}>
+                {adjusting ? "Сохранение" : "Создать корректировку"}
               </button>
             </form>
           </div>
@@ -786,6 +854,13 @@ export function AccountsClient() {
                       </div>
                     </div>
                     <div className="flex gap-2">
+                      <button
+                        type="button"
+                        className="btn-secondary px-2"
+                        onClick={() => startAdjustment(account)}
+                      >
+                        Корректировать
+                      </button>
                       <button
                         type="button"
                         className="btn-secondary px-2"

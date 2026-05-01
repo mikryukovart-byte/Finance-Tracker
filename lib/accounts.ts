@@ -152,9 +152,13 @@ export async function applyTransferEffect(
   return { fromAccount, toAccount };
 }
 
-export async function ensureAdjustmentCategory(userId: string, type: "INCOME" | "EXPENSE") {
+export async function ensureAdjustmentCategory(
+  userId: string,
+  type: "INCOME" | "EXPENSE",
+  client: DbClient = prisma
+) {
   const name = "Корректировка";
-  const existingCategories = await prisma.category.findMany({
+  const existingCategories = await client.category.findMany({
     where: { userId, type }
   });
   const existing = existingCategories.find(
@@ -165,7 +169,7 @@ export async function ensureAdjustmentCategory(userId: string, type: "INCOME" | 
     return existing;
   }
 
-  return prisma.category.create({
+  return client.category.create({
     data: {
       userId,
       name,

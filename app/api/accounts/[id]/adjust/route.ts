@@ -53,34 +53,46 @@ export async function POST(request: Request, { params }: RouteContext) {
 
   const type = difference > 0 ? "INCOME" : "EXPENSE";
   const amount = Math.abs(difference);
-  const category = await ensureAdjustmentCategory(auth.userId, type);
   const description =
     parsed.data.description ||
     `Корректировка баланса счета: ${account.name}`;
 
-  const result = await prisma.$transaction(async (tx) => {
-    const transaction = await tx.transaction.create({
-      data: {
-        userId: auth.userId,
-        accountId: account.id,
-        categoryId: category.id,
-        amount,
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const category = await ensureAdjustmentCategory(auth.userId, type, tx);
+      const transaction = await tx.transaction.create({
+        data: {
+          userId: auth.userId,
+          accountId: account.id,
+          categoryId: category.id,
+          amount,
+          type,
+          date: parsed.data.date,
+          description
+        },
+        include: { category: true, account: true }
+      });
+      const updatedAccount = await applyTransactionEffect(
+        tx,
+        auth.userId,
+        account.id,
         type,
-        date: parsed.data.date,
-        description
-      },
-      include: { category: true, account: true }
+        amount
+      );
+
+      return { account: updatedAccount, transaction };
     });
-    const updatedAccount = await applyTransactionEffect(
-      tx,
-      auth.userId,
-      account.id,
-      type,
-      amount
+
+    return NextResponse.json(result, { status: 201 });
+  } catch (error) {
+    console.error("Balance adjustment API error", {
+      accountId: params.id,
+      userId: auth.userId,
+      error
+    });
+    return NextResponse.json(
+      { message: "Не удалось скорректировать баланс" },
+      { status: 500 }
     );
-
-    return { account: updatedAccount, transaction };
-  });
-
-  return NextResponse.json(result, { status: 201 });
+  }
 }

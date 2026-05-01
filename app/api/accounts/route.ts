@@ -2,7 +2,11 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
-import { ensureDefaultAccount, getCreditCardBalance } from "@/lib/accounts";
+import {
+  applyTransactionEffect,
+  ensureAdjustmentCategory,
+  ensureDefaultAccount
+} from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { accountSchema, firstZodError } from "@/lib/validation";
@@ -62,31 +66,61 @@ export async function POST(request: Request) {
   try {
     const currentDebt =
       parsed.data.type === "CREDIT_CARD" ? parsed.data.currentDebt ?? 0 : 0;
-    const account = await prisma.account.create({
-      data: {
-        userId: auth.userId,
-        name: parsed.data.name,
-        type: parsed.data.type,
-        balance:
+    const openingAmount = parsed.data.type === "CREDIT_CARD" ? currentDebt : parsed.data.balance;
+    const account = await prisma.$transaction(async (tx) => {
+      const saved = await tx.account.create({
+        data: {
+          userId: auth.userId,
+          name: parsed.data.name,
+          type: parsed.data.type,
+          balance: 0,
+          currency: parsed.data.currency,
+          creditLimit: parsed.data.type === "CREDIT_CARD" ? parsed.data.creditLimit : null,
+          currentDebt: 0,
+          minimalPayment: parsed.data.type === "CREDIT_CARD" ? parsed.data.minimalPayment : null,
+          paymentDate: parsed.data.type === "CREDIT_CARD" ? parsed.data.paymentDate : null
+        }
+      });
+
+      if (openingAmount !== 0) {
+        const type =
           parsed.data.type === "CREDIT_CARD"
-            ? getCreditCardBalance(currentDebt)
-            : parsed.data.balance,
-        currency: parsed.data.currency,
-        creditLimit: parsed.data.type === "CREDIT_CARD" ? parsed.data.creditLimit : null,
-        currentDebt,
-        minimalPayment: parsed.data.type === "CREDIT_CARD" ? parsed.data.minimalPayment : null,
-        paymentDate: parsed.data.type === "CREDIT_CARD" ? parsed.data.paymentDate : null
-      },
-      include: {
-        _count: {
-          select: {
-            transactions: true,
-            linkedLoans: true,
-            outgoingTransfers: true,
-            incomingTransfers: true
+            ? "EXPENSE"
+            : openingAmount > 0
+              ? "INCOME"
+              : "EXPENSE";
+        const amount = Math.abs(openingAmount);
+        const category = await ensureAdjustmentCategory(auth.userId, type, tx);
+        await tx.transaction.create({
+          data: {
+            userId: auth.userId,
+            accountId: saved.id,
+            categoryId: category.id,
+            amount,
+            type,
+            date: new Date(),
+            description:
+              parsed.data.type === "CREDIT_CARD"
+                ? `Начальный долг по карте: ${saved.name}`
+                : `Начальный баланс счета: ${saved.name}`
+          }
+        });
+        await applyTransactionEffect(tx, auth.userId, saved.id, type, amount);
+      }
+
+      return tx.account.findUniqueOrThrow({
+        where: { id: saved.id },
+        include: {
+          _count: {
+            select: {
+              transactions: true,
+              linkedLoans: true,
+              outgoingTransfers: true,
+              incomingTransfers: true
+            }
           }
         }
-      }
+      });
     });
 
     return NextResponse.json(account, { status: 201 });
