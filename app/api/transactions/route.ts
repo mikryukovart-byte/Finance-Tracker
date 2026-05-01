@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
-import { findOwnedAccount, getTransactionImpact } from "@/lib/accounts";
+import { applyTransactionEffect, findOwnedAccount } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { dateRangeFromSearch } from "@/lib/date-ranges";
 import { prisma } from "@/lib/prisma";
@@ -101,14 +101,13 @@ export async function POST(request: Request) {
       },
       include: { category: true, account: true }
     });
-    await tx.account.update({
-      where: { id: parsed.data.accountId },
-      data: {
-        balance: {
-          increment: getTransactionImpact(parsed.data.type, parsed.data.amount)
-        }
-      }
-    });
+    await applyTransactionEffect(
+      tx,
+      auth.userId,
+      parsed.data.accountId,
+      parsed.data.type,
+      parsed.data.amount
+    );
 
     return saved;
   });

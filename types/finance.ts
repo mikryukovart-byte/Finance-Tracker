@@ -3,6 +3,7 @@ export type LoanState = "ACTIVE" | "PAUSED" | "CLOSED";
 export type DebtPriority = "HIGH" | "MEDIUM" | "LOW";
 export type DebtType = "BANK_LOAN" | "CREDIT_CARD" | "PERSONAL_DEBT";
 export type CurrencyCode = "RUB" | "USD" | "EUR";
+export type AccountType = "DEBIT" | "CREDIT_CARD";
 
 export type Category = {
   id: string;
@@ -35,8 +36,13 @@ export type Account = {
   id: string;
   userId?: string;
   name: string;
+  type: AccountType;
   balance: number;
   currency: CurrencyCode;
+  creditLimit: number | null;
+  currentDebt: number;
+  minimalPayment: number | null;
+  paymentDate: string | null;
   createdAt?: string;
   updatedAt?: string;
   _count?: {

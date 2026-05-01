@@ -26,8 +26,13 @@ model Account {
   id                String        @id @default(cuid())
   userId            String
   name              String
+  type              String        @default("DEBIT")
   balance           Float         @default(0)
   currency          String        @default("RUB")
+  creditLimit       Float?
+  currentDebt       Float         @default(0)
+  minimalPayment    Float?
+  paymentDate       DateTime?
   transactions      Transaction[]
   linkedLoans       Loan[]
   outgoingTransfers Transfer[]    @relation("TransferFromAccount")
@@ -37,6 +42,7 @@ model Account {
 
   @@unique([id, userId])
   @@unique([userId, name])
+  @@index([userId, type])
   @@index([userId, currency])
 }
 

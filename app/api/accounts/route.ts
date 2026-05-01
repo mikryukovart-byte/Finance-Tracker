@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
-import { ensureDefaultAccount } from "@/lib/accounts";
+import { ensureDefaultAccount, getCreditCardBalance } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { accountSchema, firstZodError } from "@/lib/validation";
@@ -60,10 +60,22 @@ export async function POST(request: Request) {
   }
 
   try {
+    const currentDebt =
+      parsed.data.type === "CREDIT_CARD" ? parsed.data.currentDebt ?? 0 : 0;
     const account = await prisma.account.create({
       data: {
-        ...parsed.data,
-        userId: auth.userId
+        userId: auth.userId,
+        name: parsed.data.name,
+        type: parsed.data.type,
+        balance:
+          parsed.data.type === "CREDIT_CARD"
+            ? getCreditCardBalance(currentDebt)
+            : parsed.data.balance,
+        currency: parsed.data.currency,
+        creditLimit: parsed.data.type === "CREDIT_CARD" ? parsed.data.creditLimit : null,
+        currentDebt,
+        minimalPayment: parsed.data.type === "CREDIT_CARD" ? parsed.data.minimalPayment : null,
+        paymentDate: parsed.data.type === "CREDIT_CARD" ? parsed.data.paymentDate : null
       },
       include: {
         _count: {

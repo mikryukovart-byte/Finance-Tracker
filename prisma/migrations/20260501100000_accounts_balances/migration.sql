@@ -2,8 +2,13 @@ CREATE TABLE "Account" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "name" TEXT NOT NULL,
+    "type" TEXT NOT NULL DEFAULT 'DEBIT',
     "balance" DOUBLE PRECISION NOT NULL DEFAULT 0,
     "currency" TEXT NOT NULL DEFAULT 'RUB',
+    "creditLimit" DOUBLE PRECISION,
+    "currentDebt" DOUBLE PRECISION NOT NULL DEFAULT 0,
+    "minimalPayment" DOUBLE PRECISION,
+    "paymentDate" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -12,6 +17,7 @@ CREATE TABLE "Account" (
 
 CREATE UNIQUE INDEX "Account_id_userId_key" ON "Account"("id", "userId");
 CREATE UNIQUE INDEX "Account_userId_name_key" ON "Account"("userId", "name");
+CREATE INDEX "Account_userId_type_idx" ON "Account"("userId", "type");
 CREATE INDEX "Account_userId_currency_idx" ON "Account"("userId", "currency");
 
 WITH users AS (

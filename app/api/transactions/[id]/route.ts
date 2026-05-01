@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
-import { findOwnedAccount, getTransactionImpact } from "@/lib/accounts";
+import { applyTransactionEffect, findOwnedAccount } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { firstZodError, transactionSchema } from "@/lib/validation";
@@ -63,41 +63,23 @@ export async function PUT(request: Request, { params }: RouteContext) {
     }
 
     const transaction = await prisma.$transaction(async (tx) => {
-      if (existing.accountId !== parsed.data.accountId) {
-        if (existing.accountId) {
-          await tx.account.update({
-            where: { id: existing.accountId },
-            data: {
-              balance: {
-                decrement: getTransactionImpact(existing.type, existing.amount)
-              }
-            }
-          });
-        }
-        await tx.account.update({
-          where: { id: parsed.data.accountId },
-          data: {
-            balance: {
-              increment: getTransactionImpact(parsed.data.type, parsed.data.amount)
-            }
-          }
-        });
-      } else {
-        const difference =
-          getTransactionImpact(parsed.data.type, parsed.data.amount) -
-          getTransactionImpact(existing.type, existing.amount);
-
-        if (difference !== 0) {
-          await tx.account.update({
-            where: { id: parsed.data.accountId },
-            data: {
-              balance: {
-                increment: difference
-              }
-            }
-          });
-        }
+      if (existing.accountId) {
+        await applyTransactionEffect(
+          tx,
+          auth.userId,
+          existing.accountId,
+          existing.type,
+          existing.amount,
+          -1
+        );
       }
+      await applyTransactionEffect(
+        tx,
+        auth.userId,
+        parsed.data.accountId,
+        parsed.data.type,
+        parsed.data.amount
+      );
 
       return tx.transaction.update({
         where: { id: params.id },
@@ -138,14 +120,14 @@ export async function DELETE(_request: Request, { params }: RouteContext) {
     await prisma.$transaction(async (tx) => {
       await tx.transaction.delete({ where: { id: params.id } });
       if (existing.accountId) {
-        await tx.account.update({
-          where: { id: existing.accountId },
-          data: {
-            balance: {
-              decrement: getTransactionImpact(existing.type, existing.amount)
-            }
-          }
-        });
+        await applyTransactionEffect(
+          tx,
+          auth.userId,
+          existing.accountId,
+          existing.type,
+          existing.amount,
+          -1
+        );
       }
     });
     return NextResponse.json({ ok: true });

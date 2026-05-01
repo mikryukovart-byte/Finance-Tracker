@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
+import { applyTransferEffect } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { firstZodError, transferSchema } from "@/lib/validation";
@@ -70,14 +71,13 @@ export async function POST(request: Request) {
         toAccount: true
       }
     });
-    await tx.account.update({
-      where: { id: parsed.data.fromAccountId },
-      data: { balance: { decrement: parsed.data.amount } }
-    });
-    await tx.account.update({
-      where: { id: parsed.data.toAccountId },
-      data: { balance: { increment: parsed.data.amount } }
-    });
+    await applyTransferEffect(
+      tx,
+      auth.userId,
+      parsed.data.fromAccountId,
+      parsed.data.toAccountId,
+      parsed.data.amount
+    );
 
     return saved;
   });

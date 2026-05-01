@@ -27,6 +27,11 @@ const currencySchema = z.enum(["RUB", "USD", "EUR"], {
   invalid_type_error: "Некорректная валюта"
 });
 
+const accountTypeSchema = z.enum(["DEBIT", "CREDIT_CARD"], {
+  required_error: "Укажите тип счета",
+  invalid_type_error: "Некорректный тип счета"
+});
+
 function normalizeMoney(value: unknown) {
   if (typeof value === "string") {
     const trimmed = value.trim().replace(/\s/g, "").replace(",", ".");
@@ -104,16 +109,44 @@ export const categorySchema = z.object({
   type: transactionTypeSchema
 });
 
-export const accountSchema = z.object({
-  name: z
-    .string({ required_error: "Укажите название счета" })
-    .trim()
-    .min(2, "Название должно быть не короче 2 символов")
-    .max(60, "Название должно быть короче 60 символов")
-    .transform((value) => value.replace(/\s+/g, " ")),
-  balance: moneySchema("Укажите баланс"),
-  currency: currencySchema.default("RUB")
-});
+export const accountSchema = z
+  .object({
+    name: z
+      .string({ required_error: "Укажите название счета" })
+      .trim()
+      .min(2, "Название должно быть не короче 2 символов")
+      .max(60, "Название должно быть короче 60 символов")
+      .transform((value) => value.replace(/\s+/g, " ")),
+    type: accountTypeSchema.default("DEBIT"),
+    balance: moneySchema("Укажите баланс"),
+    currency: currencySchema.default("RUB"),
+    creditLimit: optionalPositiveMoneySchema("Лимит должен быть больше нуля"),
+    currentDebt: optionalNonnegativeMoneySchema("Текущий долг не может быть отрицательным"),
+    minimalPayment: optionalNonnegativeMoneySchema("Платеж не может быть отрицательным"),
+    paymentDate: optionalDateSchema
+  })
+  .superRefine((value, context) => {
+    if (value.type === "CREDIT_CARD" && !value.creditLimit) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["creditLimit"],
+        message: "Укажите кредитный лимит"
+      });
+    }
+
+    if (
+      value.type === "CREDIT_CARD" &&
+      value.creditLimit &&
+      value.currentDebt &&
+      value.currentDebt > value.creditLimit
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["currentDebt"],
+        message: "Текущий долг не может быть больше лимита"
+      });
+    }
+  });
 
 export const transferSchema = z
   .object({
@@ -259,8 +292,13 @@ export const backupImportSchema = z.object({
       z.object({
         id: z.string().optional(),
         name: z.string().trim().min(2),
+        type: accountTypeSchema.default("DEBIT"),
         balance: moneySchema("Укажите баланс"),
-        currency: currencySchema.default("RUB")
+        currency: currencySchema.default("RUB"),
+        creditLimit: optionalPositiveMoneySchema("Лимит должен быть больше нуля").optional(),
+        currentDebt: optionalNonnegativeMoneySchema("Текущий долг не может быть отрицательным").optional(),
+        minimalPayment: optionalNonnegativeMoneySchema("Платеж не может быть отрицательным").optional(),
+        paymentDate: optionalDateSchema.optional()
       })
     )
     .optional(),
