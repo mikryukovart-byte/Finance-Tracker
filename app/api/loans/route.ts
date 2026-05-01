@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
-import { findOwnedAccount } from "@/lib/accounts";
+import { findOwnedAccount, getCreditCardBalance } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { getDebtSummary } from "@/lib/debts";
 import { prisma } from "@/lib/prisma";
@@ -134,10 +134,53 @@ export async function POST(request: Request) {
         }
       });
 
-      if (saved.debtType === "CREDIT_CARD" && saved.accountId) {
-        await tx.account.update({
-          where: { id: saved.accountId },
-          data: { balance: -saved.remainingAmount }
+      if (saved.debtType === "CREDIT_CARD") {
+        const cardData = {
+          type: "CREDIT_CARD",
+          balance: getCreditCardBalance(saved.remainingAmount),
+          creditLimit: saved.creditLimit ?? saved.initialAmount,
+          currentDebt: saved.remainingAmount,
+          minimalPayment: saved.minimalPayment ?? saved.monthlyPayment,
+          paymentDate: saved.paymentDate
+        };
+
+        if (saved.accountId) {
+          await tx.account.update({
+            where: { id: saved.accountId },
+            data: cardData
+          });
+
+          return tx.loan.findUniqueOrThrow({
+            where: { id: saved.id },
+            include: {
+              account: true,
+              payments: {
+                orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+                take: 8
+              }
+            }
+          });
+        }
+
+        const account = await tx.account.create({
+          data: {
+            userId: auth.userId,
+            name: `Карта: ${saved.title} ${saved.id.slice(0, 6)}`,
+            currency: "RUB",
+            ...cardData
+          }
+        });
+
+        return tx.loan.update({
+          where: { id: saved.id },
+          data: { accountId: account.id },
+          include: {
+            account: true,
+            payments: {
+              orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+              take: 8
+            }
+          }
         });
       }
 

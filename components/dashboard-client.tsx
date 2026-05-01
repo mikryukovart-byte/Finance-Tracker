@@ -397,7 +397,12 @@ export function DashboardClient() {
             >
               {accounts.map((account) => (
                 <option key={account.id} value={account.id}>
-                  {account.name} · {formatCurrency(account.balance, account.currency)}
+                  {account.type === "CREDIT_CARD"
+                    ? `${account.name} · долг ${formatCurrency(
+                        account.currentDebt,
+                        account.currency
+                      )}`
+                    : `${account.name} · ${formatCurrency(account.balance, account.currency)}`}
                 </option>
               ))}
             </select>
@@ -494,10 +499,23 @@ export function DashboardClient() {
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {stats.accounts.map((account) => (
                   <div key={account.id} className="rounded-md border border-line p-3">
-                    <div className="text-sm text-muted">{account.name}</div>
-                    <div className="mt-1 text-lg font-semibold text-ink">
-                      {formatCurrency(account.balance, account.currency)}
+                    <div className="text-sm text-muted">
+                      {account.name}
+                      {account.type === "CREDIT_CARD" ? " · кредитная карта" : ""}
                     </div>
+                    <div className="mt-1 text-lg font-semibold text-ink">
+                      {account.type === "CREDIT_CARD"
+                        ? formatCurrency(
+                            Math.max(0, (account.creditLimit ?? 0) - account.currentDebt),
+                            account.currency
+                          )
+                        : formatCurrency(account.balance, account.currency)}
+                    </div>
+                    {account.type === "CREDIT_CARD" ? (
+                      <div className="mt-1 text-xs text-muted">
+                        Долг: {formatCurrency(account.currentDebt, account.currency)}
+                      </div>
+                    ) : null}
                   </div>
                 ))}
               </div>

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getTransactionImpact } from "@/lib/accounts";
+import { applyTransactionEffect, getCreditCardBalance } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
@@ -64,14 +64,14 @@ export async function DELETE(_request: Request, { params }: RouteContext) {
 
       if (transaction) {
         if (transaction.accountId) {
-          await tx.account.update({
-            where: { id: transaction.accountId },
-            data: {
-              balance: {
-                decrement: getTransactionImpact(transaction.type, transaction.amount)
-              }
-            }
-          });
+          await applyTransactionEffect(
+            tx,
+            auth.userId,
+            transaction.accountId,
+            transaction.type,
+            transaction.amount,
+            -1
+          );
         }
       }
     }
@@ -79,7 +79,10 @@ export async function DELETE(_request: Request, { params }: RouteContext) {
     if (updatedLoan.debtType === "CREDIT_CARD" && updatedLoan.accountId) {
       await tx.account.update({
         where: { id: updatedLoan.accountId },
-        data: { balance: -updatedLoan.remainingAmount }
+        data: {
+          currentDebt: updatedLoan.remainingAmount,
+          balance: getCreditCardBalance(updatedLoan.remainingAmount)
+        }
       });
     }
 

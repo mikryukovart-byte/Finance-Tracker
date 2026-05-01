@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
-import { ensureAdjustmentCategory } from "@/lib/accounts";
+import {
+  applyTransactionEffect,
+  ensureAdjustmentCategory,
+  getCreditCardBalance
+} from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { balanceAdjustmentSchema, firstZodError } from "@/lib/validation";
@@ -39,7 +43,9 @@ export async function POST(request: Request, { params }: RouteContext) {
     return NextResponse.json({ message: "Счет не найден" }, { status: 404 });
   }
 
-  const difference = parsed.data.balance - account.balance;
+  const currentValue =
+    account.type === "CREDIT_CARD" ? getCreditCardBalance(account.currentDebt) : account.balance;
+  const difference = parsed.data.balance - currentValue;
 
   if (difference === 0) {
     return NextResponse.json({ account, transaction: null });
@@ -65,12 +71,13 @@ export async function POST(request: Request, { params }: RouteContext) {
       },
       include: { category: true, account: true }
     });
-    const updatedAccount = await tx.account.update({
-      where: { id: account.id },
-      data: {
-        balance: parsed.data.balance
-      }
-    });
+    const updatedAccount = await applyTransactionEffect(
+      tx,
+      auth.userId,
+      account.id,
+      type,
+      amount
+    );
 
     return { account: updatedAccount, transaction };
   });

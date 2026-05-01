@@ -2,7 +2,11 @@ import type { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
-import { findOwnedAccount, getTransactionImpact } from "@/lib/accounts";
+import {
+  applyTransactionEffect,
+  findOwnedAccount,
+  getCreditCardBalance
+} from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { firstZodError, loanPaymentSchema } from "@/lib/validation";
@@ -98,14 +102,13 @@ export async function POST(request: Request, { params }: RouteContext) {
         categoryId: category.id
       }
     });
-    await tx.account.update({
-      where: { id: account.id },
-      data: {
-        balance: {
-          increment: getTransactionImpact("EXPENSE", parsed.data.amount)
-        }
-      }
-    });
+    await applyTransactionEffect(
+      tx,
+      auth.userId,
+      account.id,
+      "EXPENSE",
+      parsed.data.amount
+    );
 
     const payment = await tx.loanPayment.create({
       data: {
@@ -135,7 +138,10 @@ export async function POST(request: Request, { params }: RouteContext) {
     if (updatedLoan.debtType === "CREDIT_CARD" && updatedLoan.accountId) {
       await tx.account.update({
         where: { id: updatedLoan.accountId },
-        data: { balance: -updatedLoan.remainingAmount }
+        data: {
+          currentDebt: updatedLoan.remainingAmount,
+          balance: getCreditCardBalance(updatedLoan.remainingAmount)
+        }
       });
     }
 

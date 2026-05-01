@@ -9,12 +9,17 @@ import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { fetchAccounts, readErrorMessage } from "@/lib/client-api";
 import { formatCurrency, formatDate, toDateInputValue } from "@/lib/format";
-import type { Account, CurrencyCode, Transfer } from "@/types/finance";
+import type { Account, AccountType, CurrencyCode, Transfer } from "@/types/finance";
 
 type AccountForm = {
   name: string;
+  type: AccountType;
   balance: string;
   currency: CurrencyCode;
+  creditLimit: string;
+  currentDebt: string;
+  minimalPayment: string;
+  paymentDate: string;
 };
 
 type TransferForm = {
@@ -36,12 +41,29 @@ type FormErrors = Partial<Record<keyof AccountForm | keyof TransferForm | "adjus
 
 const initialAccountForm: AccountForm = {
   name: "",
+  type: "DEBIT",
   balance: "0",
-  currency: "RUB"
+  currency: "RUB",
+  creditLimit: "",
+  currentDebt: "0",
+  minimalPayment: "",
+  paymentDate: ""
 };
 
 function parseAmount(value: string) {
   return Number(value.trim().replace(/\s/g, "").replace(",", "."));
+}
+
+function parseOptionalAmount(value: string) {
+  if (!value.trim()) {
+    return null;
+  }
+
+  return parseAmount(value);
+}
+
+function getAvailableLimit(account: Account) {
+  return Math.max(0, (account.creditLimit ?? 0) - account.currentDebt);
 }
 
 function createTransferForm(accounts: Account[]): TransferForm {
@@ -140,8 +162,13 @@ export function AccountsClient() {
     setEditingId(account.id);
     setForm({
       name: account.name,
+      type: account.type ?? "DEBIT",
       balance: String(account.balance),
-      currency: account.currency
+      currency: account.currency,
+      creditLimit: account.creditLimit ? String(account.creditLimit) : "",
+      currentDebt: String(account.currentDebt ?? 0),
+      minimalPayment: account.minimalPayment ? String(account.minimalPayment) : "",
+      paymentDate: account.paymentDate ? toDateInputValue(new Date(account.paymentDate)) : ""
     });
     setErrors({});
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -152,13 +179,39 @@ export function AccountsClient() {
     setMessage("");
     const nextErrors: FormErrors = {};
     const balance = parseAmount(form.balance);
+    const creditLimit = parseOptionalAmount(form.creditLimit);
+    const currentDebt = parseAmount(form.currentDebt);
+    const minimalPayment = parseOptionalAmount(form.minimalPayment);
 
     if (form.name.trim().length < 2) {
       nextErrors.name = "Название должно быть не короче 2 символов";
     }
 
-    if (!Number.isFinite(balance)) {
+    if (form.type === "DEBIT" && !Number.isFinite(balance)) {
       nextErrors.balance = "Введите корректный баланс";
+    }
+
+    if (form.type === "CREDIT_CARD") {
+      if (!Number.isFinite(creditLimit) || creditLimit === null || creditLimit <= 0) {
+        nextErrors.creditLimit = "Укажите кредитный лимит";
+      }
+
+      if (!Number.isFinite(currentDebt) || currentDebt < 0) {
+        nextErrors.currentDebt = "Введите корректный текущий долг";
+      }
+
+      if (
+        Number.isFinite(creditLimit) &&
+        creditLimit !== null &&
+        Number.isFinite(currentDebt) &&
+        currentDebt > creditLimit
+      ) {
+        nextErrors.currentDebt = "Долг не может быть больше лимита";
+      }
+
+      if (minimalPayment !== null && (!Number.isFinite(minimalPayment) || minimalPayment < 0)) {
+        nextErrors.minimalPayment = "Введите корректный платеж";
+      }
     }
 
     setErrors(nextErrors);
@@ -177,8 +230,13 @@ export function AccountsClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: form.name,
-          balance,
-          currency: form.currency
+          type: form.type,
+          balance: form.type === "DEBIT" ? balance : 0,
+          currency: form.currency,
+          creditLimit,
+          currentDebt: form.type === "CREDIT_CARD" ? currentDebt : 0,
+          minimalPayment,
+          paymentDate: form.type === "CREDIT_CARD" && form.paymentDate ? form.paymentDate : null
         })
       });
 
@@ -341,27 +399,66 @@ export function AccountsClient() {
                 <FieldError message={errors.name} />
               </div>
 
+              <div>
+                <label className="field-label" htmlFor="accountType">
+                  Тип счета
+                </label>
+                <select
+                  id="accountType"
+                  className="field mt-1"
+                  value={form.type}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      type: event.target.value as AccountType
+                    }))
+                  }
+                >
+                  <option value="DEBIT">Обычный счет</option>
+                  <option value="CREDIT_CARD">Кредитная карта</option>
+                </select>
+              </div>
+
               <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="field-label" htmlFor="accountBalance">
-                    Начальный баланс
-                  </label>
-                  <input
-                    id="accountBalance"
-                    className="field mt-1"
-                    disabled={Boolean(editingId)}
-                    inputMode="decimal"
-                    value={form.balance}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, balance: event.target.value }))
-                    }
-                    placeholder="0"
-                  />
-                  <p className="mt-1 text-xs text-muted">
-                    После создания баланс меняется через корректировку.
-                  </p>
-                  <FieldError message={errors.balance} />
-                </div>
+                {form.type === "DEBIT" ? (
+                  <div>
+                    <label className="field-label" htmlFor="accountBalance">
+                      Начальный баланс
+                    </label>
+                    <input
+                      id="accountBalance"
+                      className="field mt-1"
+                      disabled={Boolean(editingId)}
+                      inputMode="decimal"
+                      value={form.balance}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, balance: event.target.value }))
+                      }
+                      placeholder="0"
+                    />
+                    <p className="mt-1 text-xs text-muted">
+                      После создания баланс меняется через корректировку.
+                    </p>
+                    <FieldError message={errors.balance} />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="field-label" htmlFor="creditLimit">
+                      Кредитный лимит
+                    </label>
+                    <input
+                      id="creditLimit"
+                      className="field mt-1"
+                      inputMode="decimal"
+                      value={form.creditLimit}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, creditLimit: event.target.value }))
+                      }
+                      placeholder="100000"
+                    />
+                    <FieldError message={errors.creditLimit} />
+                  </div>
+                )}
 
                 <div>
                   <label className="field-label" htmlFor="accountCurrency">
@@ -384,6 +481,63 @@ export function AccountsClient() {
                   </select>
                 </div>
               </div>
+
+              {form.type === "CREDIT_CARD" ? (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="field-label" htmlFor="currentDebt">
+                      Текущий долг
+                    </label>
+                    <input
+                      id="currentDebt"
+                      className="field mt-1"
+                      inputMode="decimal"
+                      value={form.currentDebt}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, currentDebt: event.target.value }))
+                      }
+                      placeholder="0"
+                    />
+                    <FieldError message={errors.currentDebt} />
+                  </div>
+                  <div>
+                    <label className="field-label" htmlFor="minimalPayment">
+                      Минимальный платеж
+                    </label>
+                    <input
+                      id="minimalPayment"
+                      className="field mt-1"
+                      inputMode="decimal"
+                      value={form.minimalPayment}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          minimalPayment: event.target.value
+                        }))
+                      }
+                      placeholder="Необязательно"
+                    />
+                    <FieldError message={errors.minimalPayment} />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="field-label" htmlFor="cardPaymentDate">
+                      Дата платежа
+                    </label>
+                    <input
+                      id="cardPaymentDate"
+                      className="field mt-1"
+                      type="date"
+                      value={form.paymentDate}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          paymentDate: event.target.value
+                        }))
+                      }
+                    />
+                  </div>
+                </div>
+              ) : null}
 
               <Notice message={message} tone={messageTone} />
 
@@ -598,10 +752,35 @@ export function AccountsClient() {
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <h2 className="text-lg font-semibold text-ink">{account.name}</h2>
-                      <div className="mt-1 text-sm text-muted">{account.currency}</div>
-                      <div className="mt-4 text-2xl font-semibold text-ink">
-                        {formatCurrency(account.balance, account.currency)}
+                      <div className="mt-1 text-sm text-muted">
+                        {account.type === "CREDIT_CARD" ? "Кредитная карта" : "Обычный счет"} ·{" "}
+                        {account.currency}
                       </div>
+                      <div className="mt-4 text-2xl font-semibold text-ink">
+                        {account.type === "CREDIT_CARD"
+                          ? formatCurrency(getAvailableLimit(account), account.currency)
+                          : formatCurrency(account.balance, account.currency)}
+                      </div>
+                      {account.type === "CREDIT_CARD" ? (
+                        <div className="mt-3 grid gap-1 text-sm text-muted">
+                          <div>
+                            Лимит: {formatCurrency(account.creditLimit ?? 0, account.currency)}
+                          </div>
+                          <div>
+                            Текущий долг:{" "}
+                            {formatCurrency(account.currentDebt ?? 0, account.currency)}
+                          </div>
+                          <div>
+                            Доступно: {formatCurrency(getAvailableLimit(account), account.currency)}
+                          </div>
+                          {account.minimalPayment ? (
+                            <div>
+                              Минимальный платеж:{" "}
+                              {formatCurrency(account.minimalPayment, account.currency)}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                       <div className="mt-3 text-sm text-muted">
                         Операций: {account._count?.transactions ?? 0}
                       </div>

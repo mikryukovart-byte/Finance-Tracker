@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
-import { ensureDefaultAccount, getTransactionImpact } from "@/lib/accounts";
+import {
+  ensureDefaultAccount,
+  getCreditCardBalance,
+  getTransactionImpact
+} from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { backupImportSchema, firstZodError } from "@/lib/validation";
@@ -137,6 +141,20 @@ export async function POST(request: Request) {
 
     for (const account of parsed.data.accounts ?? []) {
       const normalizedName = account.name.trim().replace(/\s+/g, " ");
+      const accountType = account.type ?? "DEBIT";
+      const currentDebt = accountType === "CREDIT_CARD" ? account.currentDebt ?? 0 : 0;
+      const accountData = {
+        type: accountType,
+        balance:
+          accountType === "CREDIT_CARD"
+            ? getCreditCardBalance(currentDebt)
+            : account.balance,
+        currency: account.currency,
+        creditLimit: accountType === "CREDIT_CARD" ? account.creditLimit ?? null : null,
+        currentDebt,
+        minimalPayment: accountType === "CREDIT_CARD" ? account.minimalPayment ?? null : null,
+        paymentDate: accountType === "CREDIT_CARD" ? account.paymentDate ?? null : null
+      };
       const existingById = account.id
         ? await tx.account.findFirst({
             where: { id: account.id, userId: auth.userId }
@@ -150,24 +168,19 @@ export async function POST(request: Request) {
             where: { id: existingById.id },
             data: {
               name: normalizedName,
-              balance: account.balance,
-              currency: account.currency
+              ...accountData
             }
           })
         : existingByName
           ? await tx.account.update({
               where: { id: existingByName.id },
-              data: {
-                balance: account.balance,
-                currency: account.currency
-              }
+              data: accountData
             })
           : await tx.account.create({
               data: {
                 userId: auth.userId,
                 name: normalizedName,
-                balance: account.balance,
-                currency: account.currency
+                ...accountData
               }
             });
 

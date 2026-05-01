@@ -11,7 +11,7 @@ import {
   readErrorMessage,
   setCachedCategories
 } from "@/lib/client-api";
-import { toDateInputValue, typeLabels } from "@/lib/format";
+import { formatCurrency, toDateInputValue, typeLabels } from "@/lib/format";
 import type { Account, Category, TransactionKind } from "@/types/finance";
 
 type QuickTransactionInputProps = {
@@ -291,7 +291,9 @@ export function QuickTransactionInput({
           >
             {accounts.map((account) => (
               <option key={account.id} value={account.id}>
-                {account.name}
+                {account.type === "CREDIT_CARD"
+                  ? `${account.name} · долг ${formatCurrency(account.currentDebt, account.currency)}`
+                  : `${account.name} · ${formatCurrency(account.balance, account.currency)}`}
               </option>
             ))}
           </select>

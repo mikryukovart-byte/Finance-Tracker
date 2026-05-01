@@ -13,6 +13,7 @@
     "lint": "next lint",
     "db:push": "prisma db push",
     "db:backfill-accounts": "node scripts/backfill-transaction-accounts.mjs",
+    "db:backfill-credit-cards": "node scripts/backfill-credit-card-accounts.mjs",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "prisma db seed",
     "db:studio": "prisma studio"
