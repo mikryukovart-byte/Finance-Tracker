@@ -1,4 +1,5 @@
-export type TransactionKind = "INCOME" | "EXPENSE";
+export type CategoryKind = "INCOME" | "EXPENSE";
+export type TransactionKind = CategoryKind | "ADJUSTMENT";
 export type LoanState = "ACTIVE" | "PAUSED" | "CLOSED";
 export type DebtPriority = "HIGH" | "MEDIUM" | "LOW";
 export type DebtType = "BANK_LOAN" | "CREDIT_CARD" | "PERSONAL_DEBT";
@@ -9,7 +10,7 @@ export type Category = {
   id: string;
   userId?: string;
   name: string;
-  type: TransactionKind;
+  type: CategoryKind;
   createdAt?: string;
   updatedAt?: string;
   _count?: {
@@ -24,9 +25,9 @@ export type Transaction = {
   type: TransactionKind;
   date: string;
   description: string | null;
-  categoryId: string;
+  categoryId: string | null;
   accountId: string | null;
-  category: Category;
+  category: Category | null;
   account?: Account | null;
   createdAt?: string;
   updatedAt?: string;
@@ -80,6 +81,7 @@ export type Loan = {
   minimalPayment: number | null;
   creditLimit: number | null;
   interestRate: number | null;
+  gracePeriodDays: number | null;
   paymentDate: string | null;
   accountId: string | null;
   account?: Account | null;

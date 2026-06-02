@@ -29,7 +29,7 @@ import {
 } from "@/lib/client-api";
 import { formatCurrency, formatDate, toDateInputValue, typeLabels } from "@/lib/format";
 import { buildPeriodQuery, createPeriodState, describePeriod } from "@/lib/period";
-import type { Account, Category, Transaction, TransactionKind } from "@/types/finance";
+import type { Account, Category, CategoryKind, Transaction } from "@/types/finance";
 
 type TransactionForm = {
   accountId: string;
@@ -37,14 +37,14 @@ type TransactionForm = {
   categoryId: string;
   date: string;
   description: string;
-  type: TransactionKind;
+  type: CategoryKind;
 };
 
 type TransactionFilters = {
   dateFrom: string;
   dateTo: string;
   categoryId: string;
-  type: "ALL" | TransactionKind;
+  type: "ALL" | CategoryKind;
   sortBy: "date" | "amount";
   sortDir: "asc" | "desc";
 };
@@ -96,6 +96,50 @@ function validateForm(form: TransactionForm) {
     errors,
     valid: Object.keys(errors).length === 0
   };
+}
+
+function transactionCategoryName(transaction: Transaction) {
+  if (transaction.type === "ADJUSTMENT") {
+    return "Корректировка";
+  }
+
+  return transaction.category?.name ?? "Без категории";
+}
+
+function transactionAmountClass(transaction: Transaction) {
+  if (transaction.type === "INCOME") {
+    return "text-profit";
+  }
+
+  if (transaction.type === "EXPENSE") {
+    return "text-loss";
+  }
+
+  return "text-muted";
+}
+
+function transactionAmountPrefix(transaction: Transaction) {
+  if (transaction.type === "INCOME") {
+    return "+";
+  }
+
+  if (transaction.type === "EXPENSE") {
+    return "-";
+  }
+
+  return transaction.amount > 0 ? "+" : "";
+}
+
+function transactionBadgeClass(transaction: Transaction) {
+  if (transaction.type === "INCOME") {
+    return "bg-profit/10 text-profit";
+  }
+
+  if (transaction.type === "EXPENSE") {
+    return "bg-loss/10 text-loss";
+  }
+
+  return "bg-soft text-muted";
 }
 
 export function TransactionsClient() {
@@ -238,11 +282,17 @@ export function TransactionsClient() {
   }
 
   function editTransaction(transaction: Transaction) {
+    if (transaction.type === "ADJUSTMENT") {
+      setMessage("Корректировку нельзя редактировать как обычную операцию");
+      setMessageTone("error");
+      return;
+    }
+
     setEditingId(transaction.id);
     setForm({
       accountId: transaction.accountId ?? "",
       amount: String(transaction.amount),
-      categoryId: transaction.categoryId,
+      categoryId: transaction.categoryId ?? "",
       date: toDateInputValue(transaction.date),
       description: transaction.description ?? "",
       type: transaction.type
@@ -398,7 +448,7 @@ export function TransactionsClient() {
             <div>
               <span className="field-label">Тип</span>
               <div className="mt-2 grid grid-cols-2 gap-2">
-                {(["EXPENSE", "INCOME"] as TransactionKind[]).map((type) => (
+                {(["EXPENSE", "INCOME"] as CategoryKind[]).map((type) => (
                   <button
                     key={type}
                     type="button"
@@ -710,38 +760,40 @@ export function TransactionsClient() {
                       <td>
                         <span
                           className={`rounded-full px-2 py-1 text-xs font-medium ${
-                            transaction.type === "INCOME"
-                              ? "bg-profit/10 text-profit"
-                              : "bg-loss/10 text-loss"
+                            transactionBadgeClass(transaction)
                           }`}
                         >
                           {typeLabels[transaction.type]}
                         </span>
                       </td>
-                      <td className="font-medium text-ink">{transaction.category.name}</td>
+                      <td className="font-medium text-ink">
+                        {transactionCategoryName(transaction)}
+                      </td>
                       <td className="text-muted">{transaction.account?.name ?? "Счет"}</td>
                       <td className="max-w-72 truncate text-muted">
                         {transaction.description || "Без описания"}
                       </td>
                       <td
                         className={`text-right font-semibold ${
-                          transaction.type === "INCOME" ? "text-profit" : "text-loss"
+                          transactionAmountClass(transaction)
                         }`}
                       >
-                        {transaction.type === "INCOME" ? "+" : "-"}
+                        {transactionAmountPrefix(transaction)}
                         {formatCurrency(transaction.amount)}
                       </td>
                       <td>
                         <div className="flex justify-end gap-2">
-                          <button
-                            type="button"
-                            className="btn-secondary px-2"
-                            onClick={() => editTransaction(transaction)}
-                            aria-label="Редактировать операцию"
-                            title="Редактировать"
-                          >
-                            <Pencil className="h-4 w-4" aria-hidden="true" />
-                          </button>
+                          {transaction.type === "ADJUSTMENT" ? null : (
+                            <button
+                              type="button"
+                              className="btn-secondary px-2"
+                              onClick={() => editTransaction(transaction)}
+                              aria-label="Редактировать операцию"
+                              title="Редактировать"
+                            >
+                              <Pencil className="h-4 w-4" aria-hidden="true" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="btn-danger px-2"

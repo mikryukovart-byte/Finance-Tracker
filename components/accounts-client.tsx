@@ -63,7 +63,7 @@ function parseOptionalAmount(value: string) {
 }
 
 function getAvailableLimit(account: Account) {
-  return Math.max(0, (account.creditLimit ?? 0) - account.currentDebt);
+  return (account.creditLimit ?? 0) - account.currentDebt;
 }
 
 function createTransferForm(accounts: Account[]): TransferForm {
@@ -206,15 +206,6 @@ export function AccountsClient() {
 
       if (!Number.isFinite(currentDebt) || currentDebt < 0) {
         nextErrors.currentDebt = "Введите корректный текущий долг";
-      }
-
-      if (
-        Number.isFinite(creditLimit) &&
-        creditLimit !== null &&
-        Number.isFinite(currentDebt) &&
-        currentDebt > creditLimit
-      ) {
-        nextErrors.currentDebt = "Долг не может быть больше лимита";
       }
 
       if (minimalPayment !== null && (!Number.isFinite(minimalPayment) || minimalPayment < 0)) {
@@ -530,7 +521,7 @@ export function AccountsClient() {
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div>
                     <label className="field-label" htmlFor="currentDebt">
-                      Текущий долг
+                      Текущая задолженность
                     </label>
                     <input
                       id="currentDebt"
@@ -569,7 +560,7 @@ export function AccountsClient() {
                   </div>
                   <div className="sm:col-span-2">
                     <label className="field-label" htmlFor="cardPaymentDate">
-                      Дата платежа
+                      Оплатить до
                     </label>
                     <input
                       id="cardPaymentDate"
@@ -815,7 +806,10 @@ export function AccountsClient() {
             <EmptyState text="Счетов пока нет" />
           ) : (
             <div className="grid gap-4">
-              {accounts.map((account) => (
+              {accounts.map((account) => {
+                const availableLimit = getAvailableLimit(account);
+
+                return (
                 <article key={account.id} className="card p-4 sm:p-5">
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
@@ -826,21 +820,29 @@ export function AccountsClient() {
                       </div>
                       <div className="mt-4 text-2xl font-semibold text-ink">
                         {account.type === "CREDIT_CARD"
-                          ? formatCurrency(getAvailableLimit(account), account.currency)
+                          ? formatCurrency(account.balance, account.currency)
                           : formatCurrency(account.balance, account.currency)}
                       </div>
                       {account.type === "CREDIT_CARD" ? (
                         <div className="mt-3 grid gap-1 text-sm text-muted">
                           <div>
-                            Лимит: {formatCurrency(account.creditLimit ?? 0, account.currency)}
+                            Кредитный лимит:{" "}
+                            {formatCurrency(account.creditLimit ?? 0, account.currency)}
                           </div>
                           <div>
-                            Текущий долг:{" "}
+                            Текущая задолженность:{" "}
                             {formatCurrency(account.currentDebt ?? 0, account.currency)}
                           </div>
-                          <div>
-                            Доступно: {formatCurrency(getAvailableLimit(account), account.currency)}
-                          </div>
+                          {availableLimit >= 0 ? (
+                            <div>
+                              Доступно: {formatCurrency(availableLimit, account.currency)}
+                            </div>
+                          ) : (
+                            <div className="text-loss">
+                              Превышение лимита:{" "}
+                              {formatCurrency(Math.abs(availableLimit), account.currency)}
+                            </div>
+                          )}
                           {account.minimalPayment ? (
                             <div>
                               Минимальный платеж:{" "}
@@ -882,7 +884,8 @@ export function AccountsClient() {
                     </div>
                   </div>
                 </article>
-              ))}
+              );
+              })}
             </div>
           )}
 

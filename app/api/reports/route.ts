@@ -23,14 +23,14 @@ type ReportTransaction = Awaited<
   category: {
     id: string;
     name: string;
-  };
+  } | null;
 };
 
 function buildCategoryBreakdown(transactions: ReportTransaction[], type: "INCOME" | "EXPENSE") {
   const categoryMap = new Map<string, { categoryId: string; name: string; amount: number }>();
 
   for (const transaction of transactions) {
-    if (transaction.type !== type) {
+    if (transaction.type !== type || !transaction.categoryId || !transaction.category) {
       continue;
     }
 
@@ -86,7 +86,8 @@ export async function GET(request: Request) {
     orderBy: [{ date: "desc" }, { createdAt: "desc" }]
   });
   const loans = await prisma.loan.findMany({
-    where: { userId: auth.userId, status: { not: "CLOSED" } }
+    where: { userId: auth.userId, status: { not: "CLOSED" } },
+    include: { account: true }
   });
   const periodTransactions = allTransactions.filter(
     (transaction) => transaction.date >= periodStart && transaction.date < periodEnd
@@ -138,7 +139,7 @@ export async function GET(request: Request) {
 
     if (transaction.type === "INCOME") {
       bucket.income += transaction.amount;
-    } else {
+    } else if (transaction.type === "EXPENSE") {
       bucket.expense += transaction.amount;
     }
   }

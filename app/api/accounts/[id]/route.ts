@@ -40,17 +40,6 @@ export async function PUT(request: Request, { params }: RouteContext) {
   }
 
   try {
-    if (
-      existing.type === "CREDIT_CARD" &&
-      parsed.data.creditLimit &&
-      existing.currentDebt > parsed.data.creditLimit
-    ) {
-      return NextResponse.json(
-        { message: "Лимит не может быть меньше текущего долга" },
-        { status: 400 }
-      );
-    }
-
     const account = await prisma.account.update({
       where: { id: params.id },
       data: {

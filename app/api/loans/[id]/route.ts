@@ -38,6 +38,7 @@ function normalizeLoanBody(body: Record<string, unknown>) {
     minimalPayment: debtType === "CREDIT_CARD" ? minimalPayment ?? null : null,
     creditLimit: body.creditLimit ?? (debtType === "CREDIT_CARD" ? totalAmount : null),
     interestRate: body.interestRate ?? null,
+    gracePeriodDays: body.gracePeriodDays ?? null,
     paymentDate: body.paymentDate ?? null,
     accountId: body.accountId ?? null,
     priority: body.priority ?? "MEDIUM",

@@ -4,7 +4,19 @@ const prisma = new PrismaClient();
 const defaultAccountName = "Основной счет";
 
 function transactionImpact(transaction) {
-  return transaction.type === "INCOME" ? transaction.amount : -transaction.amount;
+  if (transaction.type === "INCOME") {
+    return transaction.amount;
+  }
+
+  if (transaction.type === "EXPENSE") {
+    return -transaction.amount;
+  }
+
+  if (transaction.type === "ADJUSTMENT") {
+    return transaction.amount;
+  }
+
+  return 0;
 }
 
 async function getUserIds() {

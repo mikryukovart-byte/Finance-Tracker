@@ -12,7 +12,7 @@ import {
   setCachedCategories
 } from "@/lib/client-api";
 import { formatCurrency, toDateInputValue, typeLabels } from "@/lib/format";
-import type { Account, Category, TransactionKind } from "@/types/finance";
+import type { Account, Category, CategoryKind } from "@/types/finance";
 
 type QuickTransactionInputProps = {
   title?: string;
@@ -23,7 +23,7 @@ type ParsedTransaction = {
   amount: number;
   description: string;
   categoryName: string;
-  type: TransactionKind;
+  type: CategoryKind;
 };
 
 type ManualState = ParsedTransaction & {
@@ -96,7 +96,7 @@ function parseText(value: unknown): ParsedTransaction | null {
   };
 }
 
-function findCategory(categories: Category[], type: TransactionKind, name: string) {
+function findCategory(categories: Category[], type: CategoryKind, name: string) {
   const normalizedName = normalize(name);
 
   return categories.find(

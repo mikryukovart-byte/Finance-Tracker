@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
 import {
+  adjustmentTransactionType,
   applyTransactionEffect,
-  ensureAdjustmentCategory,
   getCreditCardBalance
 } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
@@ -51,20 +51,19 @@ export async function POST(request: Request, { params }: RouteContext) {
     return NextResponse.json({ account, transaction: null });
   }
 
-  const type = difference > 0 ? "INCOME" : "EXPENSE";
-  const amount = Math.abs(difference);
+  const type = adjustmentTransactionType;
+  const amount = difference;
   const description =
     parsed.data.description ||
     `Корректировка баланса счета: ${account.name}`;
 
   try {
     const result = await prisma.$transaction(async (tx) => {
-      const category = await ensureAdjustmentCategory(auth.userId, type, tx);
       const transaction = await tx.transaction.create({
         data: {
           userId: auth.userId,
           accountId: account.id,
-          categoryId: category.id,
+          categoryId: null,
           amount,
           type,
           date: parsed.data.date,

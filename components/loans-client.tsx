@@ -49,6 +49,7 @@ type LoanForm = {
   minimalPayment: string;
   creditLimit: string;
   interestRate: string;
+  gracePeriodDays: string;
   paymentDate: string;
   priority: DebtPriority;
   status: LoanState;
@@ -74,7 +75,8 @@ const initialForm: LoanForm = {
   plannedPayment: "",
   minimalPayment: "",
   creditLimit: "",
-  interestRate: "0",
+  interestRate: "",
+  gracePeriodDays: "",
   paymentDate: "",
   priority: "MEDIUM",
   status: "ACTIVE"
@@ -99,7 +101,23 @@ function parseOptionalAmount(value: string) {
 }
 
 function getScheduledPayment(loan: Loan) {
+  if (loan.debtType === "CREDIT_CARD") {
+    return loan.account?.minimalPayment ?? loan.minimalPayment ?? loan.monthlyPayment ?? 0;
+  }
+
   return loan.plannedPayment ?? loan.minimalPayment ?? loan.monthlyPayment ?? 0;
+}
+
+function getCreditCardLimit(loan: Loan) {
+  return loan.account?.creditLimit ?? loan.creditLimit ?? loan.initialAmount ?? 0;
+}
+
+function getCreditCardDebt(loan: Loan) {
+  return loan.account?.currentDebt ?? loan.remainingAmount;
+}
+
+function getAvailableCredit(loan: Loan) {
+  return getCreditCardLimit(loan) - getCreditCardDebt(loan);
 }
 
 function getProgress(loan: Loan) {
@@ -128,6 +146,9 @@ function validateForm(form: LoanForm) {
   const plannedPayment = parseOptionalAmount(form.plannedPayment);
   const minimalPayment = parseOptionalAmount(form.minimalPayment);
   const fallbackPayment = form.debtType === "CREDIT_CARD" ? minimalPayment : plannedPayment;
+  const gracePeriodDays = form.gracePeriodDays.trim()
+    ? Number(form.gracePeriodDays.trim().replace(/\s/g, ""))
+    : null;
   const payload = {
     debtType: form.debtType,
     accountId: form.accountId || null,
@@ -140,6 +161,7 @@ function validateForm(form: LoanForm) {
     minimalPayment,
     creditLimit: parseOptionalAmount(form.creditLimit),
     interestRate: parseOptionalAmount(form.interestRate),
+    gracePeriodDays,
     paymentDate: form.paymentDate || null,
     priority: form.priority,
     status: form.status
@@ -185,20 +207,19 @@ function validateForm(form: LoanForm) {
   }
 
   if (
-    payload.creditLimit &&
-    Number.isFinite(payload.remainingAmount) &&
-    payload.remainingAmount > payload.creditLimit
-  ) {
-    errors.remainingAmount = "Долг не может быть больше кредитного лимита";
-  }
-
-  if (
     payload.interestRate !== null &&
     (!Number.isFinite(payload.interestRate) ||
       payload.interestRate < 0 ||
       payload.interestRate > 100)
   ) {
     errors.interestRate = "Процент должен быть от 0 до 100";
+  }
+
+  if (
+    payload.gracePeriodDays !== null &&
+    (!Number.isInteger(payload.gracePeriodDays) || payload.gracePeriodDays < 0)
+  ) {
+    errors.gracePeriodDays = "Льготный период должен быть целым числом";
   }
 
   return {
@@ -298,6 +319,7 @@ export function LoansClient() {
       minimalPayment: loan.minimalPayment ? String(loan.minimalPayment) : "",
       creditLimit: loan.creditLimit ? String(loan.creditLimit) : "",
       interestRate: loan.interestRate !== null ? String(loan.interestRate) : "",
+      gracePeriodDays: loan.gracePeriodDays !== null ? String(loan.gracePeriodDays) : "",
       paymentDate: loan.paymentDate ? toDateInputValue(loan.paymentDate) : "",
       priority: loan.priority,
       status: loan.status
@@ -391,6 +413,12 @@ export function LoansClient() {
 
     if (!Number.isFinite(amount) || amount <= 0) {
       setMessage("Введите сумму платежа больше нуля");
+      setMessageTone("error");
+      return;
+    }
+
+    if (loan.debtType === "CREDIT_CARD" && paymentForm.accountId === loan.accountId) {
+      setMessage("Выберите счет списания, а не саму кредитную карту");
       setMessageTone("error");
       return;
     }
@@ -565,10 +593,21 @@ export function LoansClient() {
                   setForm((current) => ({
                     ...current,
                     debtType: event.target.value as DebtType,
+                    accountId:
+                      event.target.value === "CREDIT_CARD" &&
+                      current.accountId &&
+                      !accounts.some(
+                        (account) =>
+                          account.id === current.accountId && account.type === "CREDIT_CARD"
+                      )
+                        ? ""
+                        : current.accountId,
                     plannedPayment:
                       event.target.value === "CREDIT_CARD" ? "" : current.plannedPayment,
                     minimalPayment:
-                      event.target.value === "CREDIT_CARD" ? current.minimalPayment : ""
+                      event.target.value === "CREDIT_CARD" ? current.minimalPayment : "",
+                    gracePeriodDays:
+                      event.target.value === "CREDIT_CARD" ? current.gracePeriodDays : ""
                   }))
                 }
               >
@@ -591,14 +630,20 @@ export function LoansClient() {
                 }
               >
                 <option value="">Не связывать</option>
-                {accounts.map((account) => (
+                {accounts
+                  .filter((account) =>
+                    form.debtType === "CREDIT_CARD" ? account.type === "CREDIT_CARD" : true
+                  )
+                  .map((account) => (
                   <option key={account.id} value={account.id}>
                     {account.name}
                   </option>
                 ))}
               </select>
               <p className="mt-1 text-xs text-muted">
-                Для кредитной карты связанный счет будет отражать задолженность как отрицательный баланс.
+                {form.debtType === "CREDIT_CARD"
+                  ? "Если не выбрать счет, приложение создаст отдельный счет кредитной карты."
+                  : "Обычный кредит не является spendable-счетом. Связь нужна только для учета."}
               </p>
             </div>
 
@@ -621,7 +666,7 @@ export function LoansClient() {
                         creditLimit: event.target.value
                       }))
                     }
-                    placeholder="Можно оставить пустым"
+                    placeholder="Например, 310000"
                   />
                   <FieldError message={errors.creditLimit} />
                 </div>
@@ -651,7 +696,7 @@ export function LoansClient() {
 
               <div>
                 <label className="field-label" htmlFor="remainingAmount">
-                  {form.debtType === "CREDIT_CARD" ? "Текущий долг" : "Остаток"}
+                  {form.debtType === "CREDIT_CARD" ? "Текущая задолженность" : "Остаток"}
                 </label>
                 <input
                   id="remainingAmount"
@@ -666,82 +711,148 @@ export function LoansClient() {
                       remainingAmount: event.target.value
                     }))
                   }
-                  placeholder="Например, 740000"
+                  placeholder={
+                    form.debtType === "CREDIT_CARD" ? "Например, 311334.02" : "Например, 740000"
+                  }
                 />
                 <FieldError message={errors.remainingAmount} />
               </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <label className="field-label" htmlFor="monthlyPayment">
-                  Плановый / минимальный платеж
-                </label>
-                <input
-                  id="monthlyPayment"
-                  className="field mt-1"
-                  min="0"
-                  step="0.01"
-                  type="number"
-                  value={
-                    form.debtType === "CREDIT_CARD"
-                      ? form.minimalPayment
-                      : form.plannedPayment
-                  }
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      monthlyPayment: event.target.value,
-                      plannedPayment:
-                        current.debtType === "CREDIT_CARD" ? "" : event.target.value,
-                      minimalPayment:
-                        current.debtType === "CREDIT_CARD" ? event.target.value : ""
-                    }))
-                  }
-                  placeholder="Можно оставить пустым"
-                />
-                <p className="mt-1 text-xs text-muted">
-                  Можно оставить пустым, если платеж нерегулярный
-                </p>
-                <FieldError
-                  message={
-                    form.debtType === "CREDIT_CARD"
-                      ? errors.minimalPayment
-                      : errors.plannedPayment
-                  }
-                />
-              </div>
-
-              {form.debtType !== "PERSONAL_DEBT" ? (
+            {form.debtType === "CREDIT_CARD" ? (
+              <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                <label className="field-label" htmlFor="interestRate">
-                  Процент
-                </label>
-                <input
-                  id="interestRate"
-                  className="field mt-1"
-                  min="0"
-                  max="100"
-                  step="0.01"
-                  type="number"
-                  value={form.interestRate}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      interestRate: event.target.value
-                    }))
-                  }
-                  placeholder="Например, 11.5"
-                />
-                <FieldError message={errors.interestRate} />
+                  <label className="field-label" htmlFor="minimalPayment">
+                    Минимальный платеж
+                  </label>
+                  <input
+                    id="minimalPayment"
+                    className="field mt-1"
+                    min="0"
+                    step="0.01"
+                    type="number"
+                    value={form.minimalPayment}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        monthlyPayment: event.target.value,
+                        plannedPayment: "",
+                        minimalPayment: event.target.value
+                      }))
+                    }
+                    placeholder="Можно оставить пустым"
+                  />
+                  <p className="mt-1 text-xs text-muted">
+                    Информационное поле. Можно оставить пустым.
+                  </p>
+                  <FieldError message={errors.minimalPayment} />
+                </div>
+
+                <div>
+                  <label className="field-label" htmlFor="gracePeriodDays">
+                    Льготный период, дней
+                  </label>
+                  <input
+                    id="gracePeriodDays"
+                    className="field mt-1"
+                    min="0"
+                    step="1"
+                    type="number"
+                    value={form.gracePeriodDays}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        gracePeriodDays: event.target.value
+                      }))
+                    }
+                    placeholder="Например, 55"
+                  />
+                  <FieldError message={errors.gracePeriodDays} />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="field-label" htmlFor="interestRate">
+                    Ставка после льготного периода
+                  </label>
+                  <input
+                    id="interestRate"
+                    className="field mt-1"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    type="number"
+                    value={form.interestRate}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        interestRate: event.target.value
+                      }))
+                    }
+                    placeholder="Можно оставить пустым"
+                  />
+                  <FieldError message={errors.interestRate} />
+                </div>
               </div>
-              ) : null}
-            </div>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="field-label" htmlFor="monthlyPayment">
+                    Плановый / минимальный платеж
+                  </label>
+                  <input
+                    id="monthlyPayment"
+                    className="field mt-1"
+                    min="0"
+                    step="0.01"
+                    type="number"
+                    value={form.plannedPayment}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        monthlyPayment: event.target.value,
+                        plannedPayment: event.target.value,
+                        minimalPayment: ""
+                      }))
+                    }
+                    placeholder="Можно оставить пустым"
+                  />
+                  <p className="mt-1 text-xs text-muted">
+                    Можно оставить пустым, если платеж нерегулярный
+                  </p>
+                  <FieldError message={errors.plannedPayment} />
+                </div>
+
+                {form.debtType !== "PERSONAL_DEBT" ? (
+                  <div>
+                    <label className="field-label" htmlFor="interestRate">
+                      Процент
+                    </label>
+                    <input
+                      id="interestRate"
+                      className="field mt-1"
+                      min="0"
+                      max="100"
+                      step="0.01"
+                      type="number"
+                      value={form.interestRate}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          interestRate: event.target.value
+                        }))
+                      }
+                      placeholder="Например, 11.5"
+                    />
+                    <FieldError message={errors.interestRate} />
+                  </div>
+                ) : null}
+              </div>
+            )}
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <label className="field-label" htmlFor="paymentDate">
-                  Дата платежа
+                  {form.debtType === "CREDIT_CARD" ? "Оплатить до" : "Дата платежа"}
                 </label>
                 <input
                   id="paymentDate"
@@ -780,6 +891,7 @@ export function LoansClient() {
               </div>
             </div>
 
+            {form.debtType === "CREDIT_CARD" ? null : (
             <div>
               <label className="field-label" htmlFor="loanPriority">
                 Приоритет
@@ -800,6 +912,7 @@ export function LoansClient() {
                 <option value="LOW">Низкий</option>
               </select>
             </div>
+            )}
 
             <Notice message={message} tone={messageTone} />
 
@@ -825,8 +938,12 @@ export function LoansClient() {
           ) : (
             <div className="grid gap-4">
               {loans.map((loan) => {
+                const isCreditCard = loan.debtType === "CREDIT_CARD";
                 const progress = getProgress(loan);
                 const scheduledPayment = getScheduledPayment(loan);
+                const creditLimit = getCreditCardLimit(loan);
+                const currentDebt = getCreditCardDebt(loan);
+                const availableCredit = getAvailableCredit(loan);
                 const paymentForm =
                   paymentForms[loan.id] ?? createInitialPaymentForm(accounts[0]?.id ?? "");
                 const statusTone =
@@ -854,9 +971,11 @@ export function LoansClient() {
                           <span className="rounded-full bg-soft px-2 py-0.5 text-xs text-muted">
                             {debtTypeLabels[loan.debtType]}
                           </span>
-                          <span className={`rounded-full px-2 py-0.5 text-xs ${priorityTone}`}>
-                            {debtPriorityLabels[loan.priority]}
-                          </span>
+                          {isCreditCard ? null : (
+                            <span className={`rounded-full px-2 py-0.5 text-xs ${priorityTone}`}>
+                              {debtPriorityLabels[loan.priority]}
+                            </span>
+                          )}
                         </div>
                         {loan.lender ? (
                           <div className="mt-1 text-sm text-muted">
@@ -869,48 +988,95 @@ export function LoansClient() {
                           </div>
                         ) : null}
 
-                        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                          <div>
-                            <div className="text-xs text-muted">
-                              {loan.debtType === "CREDIT_CARD" ? "Кредитный лимит" : "Общая сумма долга"}
+                        {isCreditCard ? (
+                          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                            <div>
+                              <div className="text-xs text-muted">Кредитный лимит</div>
+                              <div className="font-medium text-ink">
+                                {creditLimit > 0 ? formatCurrency(creditLimit) : "Не указан"}
+                              </div>
                             </div>
-                            <div className="font-medium text-ink">
-                              {loan.debtType === "CREDIT_CARD"
-                                ? loan.creditLimit
-                                  ? formatCurrency(loan.creditLimit)
-                                  : "Не указан"
-                                : loan.initialAmount
-                                  ? formatCurrency(loan.initialAmount)
+                            <div>
+                              <div className="text-xs text-muted">Текущая задолженность</div>
+                              <div className="font-medium text-loss">
+                                {formatCurrency(currentDebt)}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-muted">
+                                {availableCredit >= 0 ? "Доступно" : "Превышение лимита"}
+                              </div>
+                              <div
+                                className={`font-medium ${
+                                  availableCredit >= 0 ? "text-ink" : "text-loss"
+                                }`}
+                              >
+                                {formatCurrency(Math.abs(availableCredit))}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-muted">Минимальный платеж</div>
+                              <div className="font-medium text-ink">
+                                {scheduledPayment > 0 ? formatCurrency(scheduledPayment) : "Не указан"}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-muted">Оплатить до</div>
+                              <div className="font-medium text-ink">
+                                {loan.paymentDate ? formatDate(loan.paymentDate) : "Не указано"}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-muted">Льготный период, дней</div>
+                              <div className="font-medium text-ink">
+                                {loan.gracePeriodDays !== null ? loan.gracePeriodDays : "Не указан"}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-muted">
+                                Ставка после льготного периода
+                              </div>
+                              <div className="font-medium text-ink">
+                                {loan.interestRate !== null
+                                  ? `${formatPercent(loan.interestRate)}%`
                                   : "Не указана"}
+                              </div>
                             </div>
                           </div>
-                          <div>
-                            <div className="text-xs text-muted">
-                              {loan.debtType === "CREDIT_CARD" ? "Текущий долг" : "Остаток"}
+                        ) : (
+                          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                            <div>
+                              <div className="text-xs text-muted">Общая сумма долга</div>
+                              <div className="font-medium text-ink">
+                                {loan.initialAmount ? formatCurrency(loan.initialAmount) : "Не указана"}
+                              </div>
                             </div>
-                            <div className="font-medium text-loss">
-                              {formatCurrency(loan.remainingAmount)}
+                            <div>
+                              <div className="text-xs text-muted">Остаток</div>
+                              <div className="font-medium text-loss">
+                                {formatCurrency(loan.remainingAmount)}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-muted">
+                                Плановый / минимальный платеж
+                              </div>
+                              <div className="font-medium text-ink">
+                                {scheduledPayment > 0 ? formatCurrency(scheduledPayment) : "Не указан"}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-muted">Процент</div>
+                              <div className="font-medium text-ink">
+                                {loan.interestRate !== null
+                                  ? `${formatPercent(loan.interestRate)}%`
+                                  : "Не указан"}
+                              </div>
                             </div>
                           </div>
-                          <div>
-                            <div className="text-xs text-muted">
-                              Плановый / минимальный платеж
-                            </div>
-                            <div className="font-medium text-ink">
-                              {scheduledPayment > 0 ? formatCurrency(scheduledPayment) : "Не указан"}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-xs text-muted">Процент</div>
-                            <div className="font-medium text-ink">
-                              {loan.interestRate !== null
-                                ? `${formatPercent(loan.interestRate)}%`
-                                : "Не указан"}
-                            </div>
-                          </div>
-                        </div>
+                        )}
 
-                        {progress ? (
+                        {!isCreditCard && progress ? (
                           <div className="mt-4">
                             <div className="mb-2 flex justify-between text-xs text-muted">
                               <span>{progress.label}</span>
@@ -925,9 +1091,11 @@ export function LoansClient() {
                           </div>
                         ) : null}
 
+                        {!isCreditCard ? (
                         <div className="mt-3 text-sm text-muted">
                           Дата платежа: {formatDate(loan.paymentDate)}
                         </div>
+                        ) : null}
                       </div>
 
                       <div className="flex gap-2">
@@ -956,7 +1124,7 @@ export function LoansClient() {
                       <div className="mt-5 border-t border-line pt-4">
                         <div className="mb-3 flex items-center gap-2 text-sm font-medium text-ink">
                           <Plus className="h-4 w-4" aria-hidden="true" />
-                          Внести сумму
+                          {isCreditCard ? "Погасить карту" : "Внести сумму"}
                         </div>
                         <div className="grid gap-3 lg:grid-cols-[1fr_1fr_150px_1.3fr_auto]">
                           <select
@@ -967,7 +1135,11 @@ export function LoansClient() {
                             }
                             aria-label="Счет списания платежа"
                           >
-                            {accounts.map((account) => (
+                            {accounts
+                              .filter((account) =>
+                                isCreditCard ? account.id !== loan.accountId : true
+                              )
+                              .map((account) => (
                               <option key={account.id} value={account.id}>
                                 {account.name}
                               </option>

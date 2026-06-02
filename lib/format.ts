@@ -2,7 +2,8 @@ import type { DebtPriority, DebtType, LoanState, TransactionKind } from "@/types
 
 export const typeLabels: Record<TransactionKind, string> = {
   INCOME: "Доход",
-  EXPENSE: "Расход"
+  EXPENSE: "Расход",
+  ADJUSTMENT: "Корректировка"
 };
 
 export const loanStatusLabels: Record<LoanState, string> = {

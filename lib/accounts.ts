@@ -5,11 +5,24 @@ import { prisma } from "@/lib/prisma";
 export const defaultAccountName = "Основной счет";
 export const debitAccountType = "DEBIT";
 export const creditCardAccountType = "CREDIT_CARD";
+export const adjustmentTransactionType = "ADJUSTMENT";
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
 
 export function getTransactionImpact(type: string, amount: number) {
-  return type === "INCOME" ? amount : -amount;
+  if (type === "INCOME") {
+    return amount;
+  }
+
+  if (type === "EXPENSE") {
+    return -amount;
+  }
+
+  if (type === adjustmentTransactionType) {
+    return amount;
+  }
+
+  return 0;
 }
 
 export function getCreditCardBalance(currentDebt: number) {
@@ -20,7 +33,7 @@ export function getAvailableCreditLimit(account: {
   creditLimit: number | null;
   currentDebt: number;
 }) {
-  return Math.max(0, (account.creditLimit ?? 0) - account.currentDebt);
+  return (account.creditLimit ?? 0) - account.currentDebt;
 }
 
 function nextDebt(currentDebt: number, delta: number) {
@@ -79,7 +92,14 @@ export async function applyTransactionEffect(
   }
 
   if (account.type === creditCardAccountType) {
-    const debtDelta = (type === "EXPENSE" ? amount : -amount) * direction;
+    const debtDelta =
+      type === "EXPENSE"
+        ? amount * direction
+        : type === "INCOME"
+          ? -amount * direction
+          : type === adjustmentTransactionType
+            ? -amount * direction
+            : 0;
     const currentDebt = nextDebt(account.currentDebt, debtDelta);
 
     return client.account.update({
@@ -150,30 +170,4 @@ export async function applyTransferEffect(
   }
 
   return { fromAccount, toAccount };
-}
-
-export async function ensureAdjustmentCategory(
-  userId: string,
-  type: "INCOME" | "EXPENSE",
-  client: DbClient = prisma
-) {
-  const name = "Корректировка";
-  const existingCategories = await client.category.findMany({
-    where: { userId, type }
-  });
-  const existing = existingCategories.find(
-    (category) => category.name.toLocaleLowerCase("ru-RU") === name.toLocaleLowerCase("ru-RU")
-  );
-
-  if (existing) {
-    return existing;
-  }
-
-  return client.category.create({
-    data: {
-      userId,
-      name,
-      type
-    }
-  });
 }

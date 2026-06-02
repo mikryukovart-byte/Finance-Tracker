@@ -1,0 +1,1 @@
+ALTER TABLE "Loan" ADD COLUMN IF NOT EXISTS "gracePeriodDays" INTEGER;

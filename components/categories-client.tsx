@@ -13,11 +13,11 @@ import {
   setCachedCategories
 } from "@/lib/client-api";
 import { typeLabels } from "@/lib/format";
-import type { Category, TransactionKind } from "@/types/finance";
+import type { Category, CategoryKind } from "@/types/finance";
 
 type CategoryForm = {
   name: string;
-  type: TransactionKind;
+  type: CategoryKind;
 };
 
 type CategoryErrors = Partial<Record<keyof CategoryForm, string>>;
@@ -340,7 +340,7 @@ export function CategoriesClient() {
                 onChange={(event) =>
                   setForm((current) => ({
                     ...current,
-                    type: event.target.value as TransactionKind
+                    type: event.target.value as CategoryKind
                   }))
                 }
               >

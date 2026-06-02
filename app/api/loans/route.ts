@@ -35,6 +35,7 @@ function normalizeLoanBody(body: Record<string, unknown>) {
     minimalPayment: debtType === "CREDIT_CARD" ? minimalPayment ?? null : null,
     creditLimit: body.creditLimit ?? (debtType === "CREDIT_CARD" ? totalAmount : null),
     interestRate: body.interestRate ?? null,
+    gracePeriodDays: body.gracePeriodDays ?? null,
     paymentDate: body.paymentDate ?? null,
     accountId: body.accountId ?? null,
     priority: body.priority ?? "MEDIUM",
@@ -86,9 +87,21 @@ export async function GET() {
       { createdAt: "desc" }
     ]
   });
-  const summary = getDebtSummary(loans);
+  const effectiveLoans = loans.map((loan) =>
+    loan.debtType === "CREDIT_CARD" && loan.account
+      ? {
+          ...loan,
+          remainingAmount: loan.account.currentDebt,
+          creditLimit: loan.account.creditLimit ?? loan.creditLimit,
+          minimalPayment: loan.account.minimalPayment ?? loan.minimalPayment,
+          monthlyPayment: loan.account.minimalPayment ?? loan.monthlyPayment,
+          paymentDate: loan.account.paymentDate ?? loan.paymentDate
+        }
+      : loan
+  );
+  const summary = getDebtSummary(effectiveLoans);
 
-  return NextResponse.json({ loans, summary });
+  return NextResponse.json({ loans: effectiveLoans, summary });
 }
 
 export async function POST(request: Request) {

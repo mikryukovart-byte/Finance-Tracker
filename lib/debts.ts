@@ -1,13 +1,30 @@
 export type DebtLike = {
+  debtType?: string;
   initialAmount: number | null;
   remainingAmount: number;
   monthlyPayment: number | null;
   plannedPayment?: number | null;
   minimalPayment?: number | null;
+  account?: {
+    currentDebt: number;
+    minimalPayment?: number | null;
+  } | null;
   status: string;
 };
 
+export function getEffectiveDebtAmount(debt: DebtLike) {
+  if (debt.debtType === "CREDIT_CARD" && debt.account) {
+    return debt.account.currentDebt;
+  }
+
+  return debt.remainingAmount;
+}
+
 export function getPlannedDebtPayment(debt: DebtLike) {
+  if (debt.debtType === "CREDIT_CARD") {
+    return debt.account?.minimalPayment ?? debt.minimalPayment ?? debt.monthlyPayment ?? 0;
+  }
+
   return debt.plannedPayment ?? debt.minimalPayment ?? debt.monthlyPayment ?? 0;
 }
 
@@ -24,7 +41,7 @@ export function getDebtProgress(debt: Pick<DebtLike, "initialAmount" | "remainin
 
 export function getDebtSummary(loans: DebtLike[]) {
   const openLoans = loans.filter((loan) => loan.status !== "CLOSED");
-  const totalDebt = openLoans.reduce((sum, loan) => sum + loan.remainingAmount, 0);
+  const totalDebt = openLoans.reduce((sum, loan) => sum + getEffectiveDebtAmount(loan), 0);
   const totalInitialDebt = openLoans.reduce(
     (sum, loan) => sum + (loan.initialAmount ?? 0),
     0
@@ -34,7 +51,7 @@ export function getDebtSummary(loans: DebtLike[]) {
       return sum;
     }
 
-    return sum + Math.max(0, loan.initialAmount - loan.remainingAmount);
+    return sum + Math.max(0, loan.initialAmount - getEffectiveDebtAmount(loan));
   }, 0);
 
   return {

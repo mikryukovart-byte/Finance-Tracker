@@ -68,7 +68,8 @@ export async function POST(request: Request, { params }: RouteContext) {
   try {
     const result = await prisma.$transaction(async (tx) => {
     const loan = await tx.loan.findFirst({
-      where: { id: params.id, userId: auth.userId }
+      where: { id: params.id, userId: auth.userId },
+      include: { account: true }
     });
 
     if (!loan) {
@@ -87,10 +88,21 @@ export async function POST(request: Request, { params }: RouteContext) {
       return { status: 400 as const, body: { message: "Выберите существующий счет" } };
     }
 
+    if (loan.debtType === "CREDIT_CARD" && account.id === loan.accountId) {
+      return {
+        status: 400 as const,
+        body: { message: "Выберите счет списания, а не саму кредитную карту" }
+      };
+    }
+
     const category = await getDebtCategory(tx, auth.userId);
     const description =
       parsed.data.description?.trim() || `Платеж по долгу: ${loan.title}`;
-    const appliedAmount = Math.min(parsed.data.amount, loan.remainingAmount);
+    const currentDebt =
+      loan.debtType === "CREDIT_CARD" && loan.account
+        ? loan.account.currentDebt
+        : loan.remainingAmount;
+    const appliedAmount = Math.min(parsed.data.amount, currentDebt);
     const transaction = await tx.transaction.create({
       data: {
         userId: auth.userId,
@@ -125,7 +137,7 @@ export async function POST(request: Request, { params }: RouteContext) {
     const updatedLoan = await tx.loan.update({
       where: { id: loan.id },
       data: {
-        remainingAmount: Math.max(0, loan.remainingAmount - appliedAmount)
+        remainingAmount: Math.max(0, currentDebt - appliedAmount)
       },
       include: {
         payments: {
@@ -135,12 +147,13 @@ export async function POST(request: Request, { params }: RouteContext) {
       }
     });
 
-    if (updatedLoan.debtType === "CREDIT_CARD" && updatedLoan.accountId) {
+    if (loan.debtType === "CREDIT_CARD" && loan.accountId) {
+      const nextDebt = Math.max(0, currentDebt - appliedAmount);
       await tx.account.update({
-        where: { id: updatedLoan.accountId },
+        where: { id: loan.accountId },
         data: {
-          currentDebt: updatedLoan.remainingAmount,
-          balance: getCreditCardBalance(updatedLoan.remainingAmount)
+          currentDebt: nextDebt,
+          balance: getCreditCardBalance(nextDebt)
         }
       });
     }

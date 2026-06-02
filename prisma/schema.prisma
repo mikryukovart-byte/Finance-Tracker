@@ -53,9 +53,9 @@ model Transaction {
   type        String
   date        DateTime
   description String?
-  categoryId  String
+  categoryId  String?
   accountId   String?
-  category    Category @relation(fields: [categoryId, userId], references: [id, userId], onDelete: Restrict)
+  category    Category? @relation(fields: [categoryId, userId], references: [id, userId], onDelete: Restrict)
   account     Account? @relation(fields: [accountId, userId], references: [id, userId], onDelete: Restrict)
   loanPayments LoanPayment[]
   createdAt   DateTime @default(now())
@@ -80,6 +80,7 @@ model Loan {
   minimalPayment  Float?
   creditLimit     Float?
   interestRate    Float?
+  gracePeriodDays Int?
   paymentDate     DateTime?
   accountId       String?
   account         Account? @relation(fields: [accountId, userId], references: [id, userId], onDelete: Restrict)

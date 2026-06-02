@@ -34,13 +34,13 @@ import {
 import { formatCurrency, formatDate, toDateInputValue, typeLabels } from "@/lib/format";
 import { buildPeriodQuery, createPeriodState, describePeriod } from "@/lib/period";
 import { parseSettings, storageKey } from "@/lib/settings";
-import type { Account, Category, DashboardStats, TransactionKind } from "@/types/finance";
+import type { Account, Category, CategoryKind, DashboardStats, Transaction } from "@/types/finance";
 
 type QuickAddForm = {
   accountId: string;
   amount: string;
   categoryId: string;
-  type: TransactionKind;
+  type: CategoryKind;
 };
 
 type QuickAddStatus = {
@@ -57,6 +57,38 @@ const initialQuickAdd: QuickAddForm = {
 
 function parseAmount(value: string) {
   return Number(value.trim().replace(/\s/g, "").replace(",", "."));
+}
+
+function transactionCategoryName(transaction: Transaction) {
+  if (transaction.type === "ADJUSTMENT") {
+    return "Корректировка";
+  }
+
+  return transaction.category?.name ?? "Без категории";
+}
+
+function transactionAmountClass(transaction: Transaction) {
+  if (transaction.type === "INCOME") {
+    return "text-profit";
+  }
+
+  if (transaction.type === "EXPENSE") {
+    return "text-loss";
+  }
+
+  return "text-muted";
+}
+
+function transactionAmountPrefix(transaction: Transaction) {
+  if (transaction.type === "INCOME") {
+    return "+";
+  }
+
+  if (transaction.type === "EXPENSE") {
+    return "-";
+  }
+
+  return transaction.amount > 0 ? "+" : "";
 }
 
 export function DashboardClient() {
@@ -335,7 +367,7 @@ export function DashboardClient() {
             <div>
               <span className="field-label">Тип</span>
               <div className="mt-1 grid grid-cols-2 gap-2 md:w-52">
-                {(["EXPENSE", "INCOME"] as TransactionKind[]).map((type) => (
+                {(["EXPENSE", "INCOME"] as CategoryKind[]).map((type) => (
                   <button
                     key={type}
                     type="button"
@@ -511,7 +543,10 @@ export function DashboardClient() {
                 </Link>
               </div>
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {stats.accounts.map((account) => (
+                {stats.accounts.map((account) => {
+                  const availableCredit = (account.creditLimit ?? 0) - account.currentDebt;
+
+                  return (
                   <div key={account.id} className="rounded-md border border-line p-3">
                     <div className="text-sm text-muted">
                       {account.name}
@@ -519,19 +554,25 @@ export function DashboardClient() {
                     </div>
                     <div className="mt-1 text-lg font-semibold text-ink">
                       {account.type === "CREDIT_CARD"
-                        ? formatCurrency(
-                            Math.max(0, (account.creditLimit ?? 0) - account.currentDebt),
-                            account.currency
-                          )
+                        ? formatCurrency(account.balance, account.currency)
                         : formatCurrency(account.balance, account.currency)}
                     </div>
                     {account.type === "CREDIT_CARD" ? (
-                      <div className="mt-1 text-xs text-muted">
-                        Долг: {formatCurrency(account.currentDebt, account.currency)}
+                      <div className="mt-1 space-y-1 text-xs text-muted">
+                        <div>Долг: {formatCurrency(account.currentDebt, account.currency)}</div>
+                        {availableCredit >= 0 ? (
+                          <div>Доступно: {formatCurrency(availableCredit, account.currency)}</div>
+                        ) : (
+                          <div className="text-loss">
+                            Превышение лимита:{" "}
+                            {formatCurrency(Math.abs(availableCredit), account.currency)}
+                          </div>
+                        )}
                       </div>
                     ) : null}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
           ) : null}
@@ -671,7 +712,9 @@ export function DashboardClient() {
                   >
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-medium text-ink">{transaction.category.name}</span>
+                        <span className="font-medium text-ink">
+                          {transactionCategoryName(transaction)}
+                        </span>
                         <span className="rounded-full bg-soft px-2 py-0.5 text-xs text-muted">
                           {typeLabels[transaction.type]}
                         </span>
@@ -683,10 +726,10 @@ export function DashboardClient() {
                     </div>
                     <div
                       className={`text-base font-semibold ${
-                        transaction.type === "INCOME" ? "text-profit" : "text-loss"
+                        transactionAmountClass(transaction)
                       }`}
                     >
-                      {transaction.type === "INCOME" ? "+" : "-"}
+                      {transactionAmountPrefix(transaction)}
                       {formatCurrency(transaction.amount)}
                     </div>
                   </div>

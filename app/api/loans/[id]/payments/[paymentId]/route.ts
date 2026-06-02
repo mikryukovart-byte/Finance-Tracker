@@ -32,17 +32,24 @@ export async function DELETE(_request: Request, { params }: RouteContext) {
     }
 
     const loan = await tx.loan.findFirst({
-      where: { id: params.id, userId: auth.userId }
+      where: { id: params.id, userId: auth.userId },
+      include: { account: true }
     });
 
     if (!loan) {
       return { status: 404 as const, body: { message: "Долг не найден" } };
     }
 
+    const appliedAmount = payment.appliedAmount ?? payment.amount;
+    const nextDebt =
+      loan.debtType === "CREDIT_CARD" && loan.account
+        ? loan.account.currentDebt + appliedAmount
+        : loan.remainingAmount + appliedAmount;
+
     const updatedLoan = await tx.loan.update({
       where: { id: loan.id },
       data: {
-        remainingAmount: loan.remainingAmount + (payment.appliedAmount ?? payment.amount)
+        remainingAmount: nextDebt
       }
     });
     await tx.loanPayment.delete({ where: { id: payment.id } });
@@ -80,8 +87,8 @@ export async function DELETE(_request: Request, { params }: RouteContext) {
       await tx.account.update({
         where: { id: updatedLoan.accountId },
         data: {
-          currentDebt: updatedLoan.remainingAmount,
-          balance: getCreditCardBalance(updatedLoan.remainingAmount)
+          currentDebt: nextDebt,
+          balance: getCreditCardBalance(nextDebt)
         }
       });
     }

@@ -2,7 +2,12 @@ import { z } from "zod";
 
 import { parseDateInput } from "@/lib/date-ranges";
 
-const transactionTypeSchema = z.enum(["INCOME", "EXPENSE"], {
+const categoryTypeSchema = z.enum(["INCOME", "EXPENSE"], {
+  required_error: "Укажите тип операции",
+  invalid_type_error: "Некорректный тип операции"
+});
+
+const transactionTypeSchema = z.enum(["INCOME", "EXPENSE", "ADJUSTMENT"], {
   required_error: "Укажите тип операции",
   invalid_type_error: "Некорректный тип операции"
 });
@@ -83,6 +88,20 @@ function optionalNonnegativeMoneySchema(message: string) {
   }, z.number({ invalid_type_error: message }).finite("Укажите корректное число").min(0, message).nullable());
 }
 
+function optionalNonnegativeIntegerSchema(message: string) {
+  return z.preprocess((value) => {
+    if (value === "" || value === null || value === undefined) {
+      return null;
+    }
+
+    if (typeof value === "string") {
+      return Number(value.trim().replace(/\s/g, ""));
+    }
+
+    return value;
+  }, z.number({ invalid_type_error: message }).int(message).min(0, message).nullable());
+}
+
 const dateSchema = z.preprocess(
   parseDateInput,
   z.date({
@@ -106,7 +125,7 @@ export const categorySchema = z.object({
     .min(2, "Название должно быть не короче 2 символов")
     .max(60, "Название должно быть короче 60 символов")
     .transform((value) => value.replace(/\s+/g, " ")),
-  type: transactionTypeSchema
+  type: categoryTypeSchema
 });
 
 export const accountSchema = z
@@ -121,7 +140,7 @@ export const accountSchema = z
     balance: moneySchema("Укажите баланс"),
     currency: currencySchema.default("RUB"),
     creditLimit: optionalPositiveMoneySchema("Лимит должен быть больше нуля"),
-    currentDebt: optionalNonnegativeMoneySchema("Текущий долг не может быть отрицательным"),
+    currentDebt: optionalNonnegativeMoneySchema("Текущая задолженность не может быть отрицательной"),
     minimalPayment: optionalNonnegativeMoneySchema("Платеж не может быть отрицательным"),
     paymentDate: optionalDateSchema
   })
@@ -134,18 +153,6 @@ export const accountSchema = z
       });
     }
 
-    if (
-      value.type === "CREDIT_CARD" &&
-      value.creditLimit &&
-      value.currentDebt &&
-      value.currentDebt > value.creditLimit
-    ) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["currentDebt"],
-        message: "Текущий долг не может быть больше лимита"
-      });
-    }
   });
 
 export const transferSchema = z
@@ -193,7 +200,7 @@ export const transactionSchema = z.object({
     .max(180, "Описание должно быть короче 180 символов")
     .optional()
     .transform((value) => value || null),
-  type: transactionTypeSchema
+  type: categoryTypeSchema
 });
 
 export const loanSchema = z
@@ -225,6 +232,7 @@ export const loanSchema = z
       (value) => value === null || value <= 100,
       "Процент не должен быть больше 100"
     ),
+    gracePeriodDays: optionalNonnegativeIntegerSchema("Льготный период должен быть целым числом"),
     paymentDate: optionalDateSchema,
     accountId: z
       .preprocess(
@@ -259,13 +267,6 @@ export const loanSchema = z
       });
     }
 
-    if (value.creditLimit && value.remainingAmount > value.creditLimit) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["remainingAmount"],
-        message: "Долг по карте не может быть больше кредитного лимита"
-      });
-    }
   });
 
 export const loanPaymentSchema = z.object({
@@ -284,7 +285,7 @@ export const backupImportSchema = z.object({
     z.object({
       id: z.string().optional(),
       name: z.string().trim().min(2),
-      type: transactionTypeSchema
+      type: categoryTypeSchema
     })
   ),
   accounts: z
@@ -296,7 +297,7 @@ export const backupImportSchema = z.object({
         balance: moneySchema("Укажите баланс"),
         currency: currencySchema.default("RUB"),
         creditLimit: optionalPositiveMoneySchema("Лимит должен быть больше нуля").optional(),
-        currentDebt: optionalNonnegativeMoneySchema("Текущий долг не может быть отрицательным").optional(),
+        currentDebt: optionalNonnegativeMoneySchema("Текущая задолженность не может быть отрицательной").optional(),
         minimalPayment: optionalNonnegativeMoneySchema("Платеж не может быть отрицательным").optional(),
         paymentDate: optionalDateSchema.optional()
       })
@@ -305,11 +306,14 @@ export const backupImportSchema = z.object({
   transactions: z.array(
     z.object({
       id: z.string().optional(),
-      amount: positiveMoneySchema("Сумма должна быть больше нуля"),
+      amount: moneySchema("Укажите сумму").refine(
+        (value) => value !== 0,
+        "Сумма не должна быть равна нулю"
+      ),
       type: transactionTypeSchema,
       date: dateSchema,
       description: z.string().nullable().optional(),
-      categoryId: z.string(),
+      categoryId: z.string().nullable().optional(),
       accountId: z.string().nullable().optional()
     })
   ),
@@ -329,6 +333,7 @@ export const backupImportSchema = z.object({
         (value) => value === null || value <= 100,
         "Процент не должен быть больше 100"
       ),
+      gracePeriodDays: optionalNonnegativeIntegerSchema("Льготный период должен быть целым числом").optional(),
       paymentDate: optionalDateSchema,
       accountId: z.string().nullable().optional(),
       priority: debtPrioritySchema.default("MEDIUM"),

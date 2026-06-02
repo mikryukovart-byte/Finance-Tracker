@@ -1,10 +1,10 @@
-import type { TransactionKind } from "@/types/finance";
+import type { CategoryKind } from "@/types/finance";
 
 import { prisma } from "@/lib/prisma";
 
 export type DefaultCategory = {
   name: string;
-  type: TransactionKind;
+  type: CategoryKind;
 };
 
 export const defaultSystemCategories: DefaultCategory[] = [

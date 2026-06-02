@@ -3,8 +3,8 @@ import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
 import {
+  adjustmentTransactionType,
   applyTransactionEffect,
-  ensureAdjustmentCategory,
   ensureDefaultAccount
 } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
@@ -66,7 +66,8 @@ export async function POST(request: Request) {
   try {
     const currentDebt =
       parsed.data.type === "CREDIT_CARD" ? parsed.data.currentDebt ?? 0 : 0;
-    const openingAmount = parsed.data.type === "CREDIT_CARD" ? currentDebt : parsed.data.balance;
+    const openingAmount =
+      parsed.data.type === "CREDIT_CARD" ? -currentDebt : parsed.data.balance;
     const account = await prisma.$transaction(async (tx) => {
       const saved = await tx.account.create({
         data: {
@@ -83,21 +84,13 @@ export async function POST(request: Request) {
       });
 
       if (openingAmount !== 0) {
-        const type =
-          parsed.data.type === "CREDIT_CARD"
-            ? "EXPENSE"
-            : openingAmount > 0
-              ? "INCOME"
-              : "EXPENSE";
-        const amount = Math.abs(openingAmount);
-        const category = await ensureAdjustmentCategory(auth.userId, type, tx);
         await tx.transaction.create({
           data: {
             userId: auth.userId,
             accountId: saved.id,
-            categoryId: category.id,
-            amount,
-            type,
+            categoryId: null,
+            amount: openingAmount,
+            type: adjustmentTransactionType,
             date: new Date(),
             description:
               parsed.data.type === "CREDIT_CARD"
@@ -105,7 +98,13 @@ export async function POST(request: Request) {
                 : `Начальный баланс счета: ${saved.name}`
           }
         });
-        await applyTransactionEffect(tx, auth.userId, saved.id, type, amount);
+        await applyTransactionEffect(
+          tx,
+          auth.userId,
+          saved.id,
+          adjustmentTransactionType,
+          openingAmount
+        );
       }
 
       return tx.account.findUniqueOrThrow({

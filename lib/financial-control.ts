@@ -13,7 +13,7 @@ type TransactionWithCategory = {
   type: string;
   date: Date;
   description: string | null;
-  categoryId: string;
+  categoryId: string | null;
   createdAt: Date;
   updatedAt: Date;
   category: {
@@ -23,15 +23,20 @@ type TransactionWithCategory = {
     type: string;
     createdAt: Date;
     updatedAt: Date;
-  };
+  } | null;
 };
 
 type LoanForControl = {
+  debtType?: string;
   initialAmount: number | null;
   remainingAmount: number;
   monthlyPayment: number | null;
   plannedPayment?: number | null;
   minimalPayment?: number | null;
+  account?: {
+    currentDebt: number;
+    minimalPayment?: number | null;
+  } | null;
   status: string;
 };
 
@@ -117,6 +122,10 @@ function buildLeakage(
   >();
 
   for (const transaction of smallExpenses) {
+    if (!transaction.categoryId || !transaction.category) {
+      continue;
+    }
+
     const category = categoryMap.get(transaction.categoryId) ?? {
       categoryId: transaction.categoryId,
       name: transaction.category.name,
@@ -245,7 +254,8 @@ export async function getFinancialControlData(
     orderBy: [{ date: "desc" }, { createdAt: "desc" }]
   });
   const loans = await prisma.loan.findMany({
-    where: { userId, status: { not: "CLOSED" } }
+    where: { userId, status: { not: "CLOSED" } },
+    include: { account: true }
   });
 
   return buildFinancialControlData(transactions, loans, threshold);

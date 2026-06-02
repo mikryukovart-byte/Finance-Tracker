@@ -216,6 +216,7 @@ export async function POST(request: Request) {
         minimalPayment: loan.minimalPayment ?? null,
         creditLimit: loan.creditLimit ?? null,
         interestRate: loan.interestRate,
+        gracePeriodDays: loan.gracePeriodDays ?? null,
         paymentDate: loan.paymentDate,
         accountId: loanAccount?.id ?? null,
         priority: loan.priority,
@@ -241,18 +242,28 @@ export async function POST(request: Request) {
     }
 
     for (const transaction of parsed.data.transactions) {
-      const mappedCategoryId =
-        categoryIdMap.get(transaction.categoryId) ?? transaction.categoryId;
-      const category = await tx.category.findFirst({
-        where: {
-          userId: auth.userId,
-          id: mappedCategoryId,
-          type: transaction.type
-        }
-      });
+      let categoryId: string | null = null;
 
-      if (!category) {
-        continue;
+      if (transaction.type !== "ADJUSTMENT") {
+        if (!transaction.categoryId) {
+          continue;
+        }
+
+        const mappedCategoryId =
+          categoryIdMap.get(transaction.categoryId) ?? transaction.categoryId;
+        const category = await tx.category.findFirst({
+          where: {
+            userId: auth.userId,
+            id: mappedCategoryId,
+            type: transaction.type
+          }
+        });
+
+        if (!category) {
+          continue;
+        }
+
+        categoryId = category.id;
       }
 
       const data = {
@@ -260,7 +271,7 @@ export async function POST(request: Request) {
         type: transaction.type,
         date: transaction.date,
         description: transaction.description?.trim() || null,
-        categoryId: category.id,
+        categoryId,
         accountId: transaction.accountId
           ? accountIdMap.get(transaction.accountId) ?? transaction.accountId
           : defaultAccount.id
