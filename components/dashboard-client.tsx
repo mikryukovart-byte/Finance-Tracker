@@ -503,6 +503,18 @@ export function DashboardClient() {
               tone={stats.accountBalance >= 0 ? "income" : "expense"}
             />
             <StatCard
+              label="Общий долг"
+              value={formatCurrency(stats.totalDebt)}
+              icon={WalletCards}
+              tone="expense"
+            />
+            <StatCard
+              label="Чистая позиция"
+              value={formatCurrency(stats.netPosition)}
+              icon={PiggyBank}
+              tone={stats.netPosition >= 0 ? "income" : "expense"}
+            />
+            <StatCard
               label="Баланс за период"
               value={formatCurrency(stats.balance)}
               icon={PiggyBank}
@@ -552,9 +564,13 @@ export function DashboardClient() {
                       {account.name}
                       {account.type === "CREDIT_CARD" ? " · кредитная карта" : ""}
                     </div>
-                    <div className="mt-1 text-lg font-semibold text-ink">
+                    <div
+                      className={`mt-1 text-lg font-semibold ${
+                        account.type === "CREDIT_CARD" ? "text-loss" : "text-ink"
+                      }`}
+                    >
                       {account.type === "CREDIT_CARD"
-                        ? formatCurrency(account.balance, account.currency)
+                        ? formatCurrency(account.currentDebt, account.currency)
                         : formatCurrency(account.balance, account.currency)}
                     </div>
                     {account.type === "CREDIT_CARD" ? (

@@ -109,7 +109,10 @@ export type DashboardStats = {
   totalIncome: number;
   totalExpense: number;
   balance: number;
+  assetBalance?: number;
   accountBalance: number;
+  totalDebt: number;
+  netPosition: number;
   accounts: Account[];
   expensesToday: number;
   expensesMonth: number;
@@ -167,6 +170,7 @@ export type LeakageStats = {
 
 export type TruthResponse = {
   balance: number;
+  assetBalance: number;
   monthlyIncome: number;
   monthlyExpense: number;
   totalDebt: number;

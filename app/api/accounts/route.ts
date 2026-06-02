@@ -5,7 +5,8 @@ import { badRequest, readJsonBody } from "@/lib/api";
 import {
   adjustmentTransactionType,
   applyTransactionEffect,
-  ensureDefaultAccount
+  ensureDefaultAccount,
+  getAssetAccountBalance
 } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -39,7 +40,7 @@ export async function GET() {
 
   await ensureDefaultAccount(auth.userId);
   const accounts = await getAccounts(auth.userId);
-  const totalBalance = accounts.reduce((sum, account) => sum + account.balance, 0);
+  const totalBalance = getAssetAccountBalance(accounts);
 
   return NextResponse.json({ accounts, totalBalance });
 }

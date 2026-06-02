@@ -9,6 +9,17 @@ export const adjustmentTransactionType = "ADJUSTMENT";
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
 
+type AccountBalanceLike = {
+  type: string;
+  balance: number;
+};
+
+export function getAssetAccountBalance(accounts: AccountBalanceLike[]) {
+  return accounts
+    .filter((account) => account.type !== creditCardAccountType)
+    .reduce((sum, account) => sum + Math.max(0, account.balance), 0);
+}
+
 export function getTransactionImpact(type: string, amount: number) {
   if (type === "INCOME") {
     return amount;

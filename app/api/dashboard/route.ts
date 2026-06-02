@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { isAuthError, requireAuth } from "@/lib/auth";
+import { getAssetAccountBalance } from "@/lib/accounts";
 import { dateRangeFromSearch } from "@/lib/date-ranges";
 import { getFinancialControlData } from "@/lib/financial-control";
 import { prisma } from "@/lib/prisma";
@@ -21,13 +22,15 @@ export async function GET(request: Request) {
     where: { userId: auth.userId },
     orderBy: [{ createdAt: "asc" }, { name: "asc" }]
   });
-  const accountBalance = accounts.reduce((sum, account) => sum + account.balance, 0);
+  const accountBalance = getAssetAccountBalance(accounts);
 
   return NextResponse.json({
     totalIncome: control.totalIncome,
     totalExpense: control.totalExpense,
     balance: control.balance,
     accountBalance,
+    totalDebt: control.totalDebt,
+    netPosition: accountBalance - control.totalDebt,
     accounts,
     expensesToday: control.dailyControl.todaySpending,
     expensesMonth: control.monthlyExpense,

@@ -2,6 +2,7 @@ import {
   endOfDay,
   startOfDay
 } from "@/lib/date-ranges";
+import { getAssetAccountBalance } from "@/lib/accounts";
 import { getDebtSummary } from "@/lib/debts";
 import { prisma } from "@/lib/prisma";
 
@@ -38,6 +39,14 @@ type LoanForControl = {
     minimalPayment?: number | null;
   } | null;
   status: string;
+};
+
+type AccountForControl = {
+  id: string;
+  type: string;
+  balance: number;
+  currentDebt: number;
+  minimalPayment?: number | null;
 };
 
 type FinancialRange = {
@@ -174,7 +183,8 @@ export function buildFinancialControlData(
   transactions: TransactionWithCategory[],
   loans: LoanForControl[],
   threshold = 1000,
-  now = new Date()
+  now = new Date(),
+  accounts: AccountForControl[] = []
 ) {
   const daysLeftInMonth = Math.max(
     1,
@@ -198,15 +208,17 @@ export function buildFinancialControlData(
     .reduce((sum, transaction) => sum + transaction.amount, 0);
   const expensesYear = monthlyExpense;
   const balance = totalIncome - totalExpense;
-  const debtSummary = getDebtSummary(loans);
+  const assetBalance = getAssetAccountBalance(accounts);
+  const debtSummary = getDebtSummary(loans, accounts);
   const totalDebt = debtSummary.totalDebt;
-  const netPosition = balance - totalDebt;
+  const netPosition = assetBalance - totalDebt;
   const dailyControl = buildDailyControl(transactions, now);
 
   return {
     totalIncome,
     totalExpense,
     balance,
+    assetBalance,
     monthlyIncome,
     monthlyExpense,
     expensesYear,
@@ -219,9 +231,9 @@ export function buildFinancialControlData(
       monthSpending: monthlyExpense
     },
     survival: {
-      availableBalance: balance,
+      availableBalance: assetBalance,
       daysLeftInMonth,
-      safeDailyLimit: balance / daysLeftInMonth
+      safeDailyLimit: assetBalance / daysLeftInMonth
     },
     recentTransactions: transactions.slice(0, 6),
     leakage: buildLeakage(transactions, monthlyIncome, threshold),
@@ -243,20 +255,25 @@ export async function getFinancialControlData(
           }
         }
       : {};
-  const transactions = await prisma.transaction.findMany({
-    where: {
-      userId,
-      ...dateFilter
-    },
-    include: {
-      category: true
-    },
-    orderBy: [{ date: "desc" }, { createdAt: "desc" }]
-  });
-  const loans = await prisma.loan.findMany({
-    where: { userId, status: { not: "CLOSED" } },
-    include: { account: true }
-  });
+  const [transactions, loans, accounts] = await Promise.all([
+    prisma.transaction.findMany({
+      where: {
+        userId,
+        ...dateFilter
+      },
+      include: {
+        category: true
+      },
+      orderBy: [{ date: "desc" }, { createdAt: "desc" }]
+    }),
+    prisma.loan.findMany({
+      where: { userId, status: { not: "CLOSED" } },
+      include: { account: true }
+    }),
+    prisma.account.findMany({
+      where: { userId }
+    })
+  ]);
 
-  return buildFinancialControlData(transactions, loans, threshold);
+  return buildFinancialControlData(transactions, loans, threshold, new Date(), accounts);
 }

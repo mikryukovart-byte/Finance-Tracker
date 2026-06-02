@@ -66,6 +66,12 @@ function getAvailableLimit(account: Account) {
   return (account.creditLimit ?? 0) - account.currentDebt;
 }
 
+function getAssetBalance(accounts: Account[]) {
+  return accounts
+    .filter((account) => account.type !== "CREDIT_CARD")
+    .reduce((sum, account) => sum + Math.max(0, account.balance), 0);
+}
+
 function createTransferForm(accounts: Account[]): TransferForm {
   return {
     fromAccountId: accounts[0]?.id ?? "",
@@ -105,7 +111,7 @@ export function AccountsClient() {
   const adjustmentBalanceInputRef = useRef<HTMLInputElement | null>(null);
 
   const totalBalance = useMemo(
-    () => accounts.reduce((sum, account) => sum + account.balance, 0),
+    () => getAssetBalance(accounts),
     [accounts]
   );
   const selectedAdjustmentAccount = useMemo(
@@ -388,7 +394,7 @@ export function AccountsClient() {
 
       <div className="mb-6 grid gap-4 md:grid-cols-2">
         <StatCard
-          label="Общий баланс"
+          label="Деньги на счетах"
           value={formatCurrency(totalBalance)}
           icon={ArrowRightLeft}
           tone={totalBalance >= 0 ? "income" : "expense"}
@@ -818,9 +824,13 @@ export function AccountsClient() {
                         {account.type === "CREDIT_CARD" ? "Кредитная карта" : "Обычный счет"} ·{" "}
                         {account.currency}
                       </div>
-                      <div className="mt-4 text-2xl font-semibold text-ink">
+                      <div
+                        className={`mt-4 text-2xl font-semibold ${
+                          account.type === "CREDIT_CARD" ? "text-loss" : "text-ink"
+                        }`}
+                      >
                         {account.type === "CREDIT_CARD"
-                          ? formatCurrency(account.balance, account.currency)
+                          ? formatCurrency(account.currentDebt, account.currency)
                           : formatCurrency(account.balance, account.currency)}
                       </div>
                       {account.type === "CREDIT_CARD" ? (

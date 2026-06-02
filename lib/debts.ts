@@ -1,4 +1,5 @@
 export type DebtLike = {
+  accountId?: string | null;
   debtType?: string;
   initialAmount: number | null;
   remainingAmount: number;
@@ -10,6 +11,13 @@ export type DebtLike = {
     minimalPayment?: number | null;
   } | null;
   status: string;
+};
+
+type CreditCardAccountLike = {
+  id?: string;
+  type: string;
+  currentDebt: number;
+  minimalPayment?: number | null;
 };
 
 export function getEffectiveDebtAmount(debt: DebtLike) {
@@ -39,9 +47,27 @@ export function getDebtProgress(debt: Pick<DebtLike, "initialAmount" | "remainin
   );
 }
 
-export function getDebtSummary(loans: DebtLike[]) {
+export function getDebtSummary(loans: DebtLike[], accounts: CreditCardAccountLike[] = []) {
   const openLoans = loans.filter((loan) => loan.status !== "CLOSED");
-  const totalDebt = openLoans.reduce((sum, loan) => sum + getEffectiveDebtAmount(loan), 0);
+  const creditCardAccounts = accounts.filter((account) => account.type === "CREDIT_CARD");
+  const creditCardAccountIds = new Set(
+    creditCardAccounts.map((account) => account.id).filter(Boolean)
+  );
+  const creditCardAccountDebt = creditCardAccounts.reduce(
+    (sum, account) => sum + Math.max(0, account.currentDebt),
+    0
+  );
+  const loansForDebt = accounts.length
+    ? openLoans.filter(
+        (loan) =>
+          loan.debtType !== "CREDIT_CARD" ||
+          !loan.accountId ||
+          !creditCardAccountIds.has(loan.accountId)
+      )
+    : openLoans;
+  const totalDebt =
+    loansForDebt.reduce((sum, loan) => sum + getEffectiveDebtAmount(loan), 0) +
+    creditCardAccountDebt;
   const totalInitialDebt = openLoans.reduce(
     (sum, loan) => sum + (loan.initialAmount ?? 0),
     0
@@ -56,9 +82,14 @@ export function getDebtSummary(loans: DebtLike[]) {
 
   return {
     totalDebt,
-    paymentsThisMonth: openLoans
-      .filter((loan) => loan.status === "ACTIVE")
-      .reduce((sum, loan) => sum + getPlannedDebtPayment(loan), 0),
+    paymentsThisMonth:
+      loansForDebt
+        .filter((loan) => loan.status === "ACTIVE")
+        .reduce((sum, loan) => sum + getPlannedDebtPayment(loan), 0) +
+      creditCardAccounts.reduce(
+        (sum, account) => sum + (account.minimalPayment ?? 0),
+        0
+      ),
     totalInitialDebt,
     paidAmount,
     paidPercent: totalInitialDebt > 0 ? (paidAmount / totalInitialDebt) * 100 : 0

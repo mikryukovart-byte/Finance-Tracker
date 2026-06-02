@@ -85,10 +85,15 @@ export async function GET(request: Request) {
     include: { category: true },
     orderBy: [{ date: "desc" }, { createdAt: "desc" }]
   });
-  const loans = await prisma.loan.findMany({
-    where: { userId: auth.userId, status: { not: "CLOSED" } },
-    include: { account: true }
-  });
+  const [loans, accounts] = await Promise.all([
+    prisma.loan.findMany({
+      where: { userId: auth.userId, status: { not: "CLOSED" } },
+      include: { account: true }
+    }),
+    prisma.account.findMany({
+      where: { userId: auth.userId }
+    })
+  ]);
   const periodTransactions = allTransactions.filter(
     (transaction) => transaction.date >= periodStart && transaction.date < periodEnd
   );
@@ -96,7 +101,13 @@ export async function GET(request: Request) {
     (transaction) =>
       transaction.date >= previousPeriodStart && transaction.date < previousPeriodEnd
   );
-  const control = buildFinancialControlData(periodTransactions, loans, threshold, now);
+  const control = buildFinancialControlData(
+    periodTransactions,
+    loans,
+    threshold,
+    now,
+    accounts
+  );
 
   const byExpenseCategory = buildCategoryBreakdown(periodTransactions, "EXPENSE");
   const byIncomeCategory = buildCategoryBreakdown(periodTransactions, "INCOME");

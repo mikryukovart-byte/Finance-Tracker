@@ -80,10 +80,10 @@ export function TruthClient() {
         <div className="space-y-6">
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             <StatCard
-              label="Текущий баланс"
-              value={formatCurrency(data.balance)}
+              label="Деньги на счетах"
+              value={formatCurrency(data.assetBalance)}
               icon={WalletCards}
-              tone={data.balance >= 0 ? "income" : "expense"}
+              tone={data.assetBalance >= 0 ? "income" : "expense"}
             />
             <StatCard
               label="Доход за период"
