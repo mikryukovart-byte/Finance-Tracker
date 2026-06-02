@@ -203,6 +203,22 @@ export const transactionSchema = z.object({
   type: categoryTypeSchema
 });
 
+export const adjustmentTransactionSchema = z.object({
+  amount: moneySchema("Введите сумму корректировки").refine(
+    (value) => value !== 0,
+    "Сумма корректировки не может быть нулевой"
+  ),
+  accountId: z.string().min(1, "Выберите счет"),
+  date: dateSchema,
+  description: z
+    .string()
+    .trim()
+    .max(180, "Описание должно быть короче 180 символов")
+    .optional()
+    .transform((value) => value || null),
+  type: transactionTypeSchema.optional()
+});
+
 export const loanSchema = z
   .object({
     debtType: debtTypeSchema.default("BANK_LOAN"),

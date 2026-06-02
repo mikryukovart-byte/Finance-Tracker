@@ -318,6 +318,30 @@ export function AccountsClient() {
     }
   }
 
+  async function deleteTransfer(transfer: Transfer) {
+    const confirmed = window.confirm("Удалить перевод? Балансы счетов будут пересчитаны.");
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/transfers/${transfer.id}`, { method: "DELETE" });
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      await loadData(false);
+      setMessage("Перевод удален");
+      setMessageTone("success");
+      window.dispatchEvent(new Event("finance-data-changed"));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Не удалось удалить перевод");
+      setMessageTone("error");
+    }
+  }
+
   async function adjustBalance(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const balance = parseAmount(adjustmentForm.balance);
@@ -907,17 +931,30 @@ export function AccountsClient() {
               <div className="divide-y divide-line overflow-hidden rounded-md border border-line">
                 {transfers.map((transfer) => (
                   <div key={transfer.id} className="px-3 py-3 text-sm hover:bg-hover">
-                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="font-medium text-ink">
-                        {transfer.fromAccount?.name} {"->"} {transfer.toAccount?.name}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-medium text-ink">
+                          {transfer.fromAccount?.name} {"->"} {transfer.toAccount?.name}
+                        </div>
+                        <div className="mt-1 text-xs text-muted">
+                          {formatDate(transfer.date)}
+                          {transfer.description ? ` · ${transfer.description}` : ""}
+                        </div>
                       </div>
-                      <div className="font-semibold text-ink">
-                        {formatCurrency(transfer.amount)}
+                      <div className="flex shrink-0 items-center gap-2">
+                        <div className="font-semibold text-ink">
+                          {formatCurrency(transfer.amount)}
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-danger px-2"
+                          onClick={() => deleteTransfer(transfer)}
+                          aria-label="Удалить перевод"
+                          title="Удалить"
+                        >
+                          <Trash2 className="h-4 w-4" aria-hidden="true" />
+                        </button>
                       </div>
-                    </div>
-                    <div className="mt-1 text-xs text-muted">
-                      {formatDate(transfer.date)}
-                      {transfer.description ? ` · ${transfer.description}` : ""}
                     </div>
                   </div>
                 ))}

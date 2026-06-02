@@ -182,3 +182,54 @@ export async function applyTransferEffect(
 
   return { fromAccount, toAccount };
 }
+
+export async function rollbackTransferEffect(
+  client: DbClient,
+  userId: string,
+  fromAccountId: string,
+  toAccountId: string,
+  amount: number
+) {
+  const [fromAccount, toAccount] = await Promise.all([
+    client.account.findFirst({ where: { id: fromAccountId, userId } }),
+    client.account.findFirst({ where: { id: toAccountId, userId } })
+  ]);
+
+  if (!fromAccount || !toAccount) {
+    throw new Error("Выберите существующие счета");
+  }
+
+  if (fromAccount.type === creditCardAccountType) {
+    const currentDebt = nextDebt(fromAccount.currentDebt, -amount);
+    await client.account.update({
+      where: { id: fromAccount.id },
+      data: {
+        currentDebt,
+        balance: getCreditCardBalance(currentDebt)
+      }
+    });
+  } else {
+    await client.account.update({
+      where: { id: fromAccount.id },
+      data: { balance: { increment: amount } }
+    });
+  }
+
+  if (toAccount.type === creditCardAccountType) {
+    const currentDebt = nextDebt(toAccount.currentDebt, amount);
+    await client.account.update({
+      where: { id: toAccount.id },
+      data: {
+        currentDebt,
+        balance: getCreditCardBalance(currentDebt)
+      }
+    });
+  } else {
+    await client.account.update({
+      where: { id: toAccount.id },
+      data: { balance: { decrement: amount } }
+    });
+  }
+
+  return { fromAccount, toAccount };
+}

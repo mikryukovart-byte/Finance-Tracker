@@ -1,10 +1,12 @@
 "use client";
 
 import {
+  ArrowRightLeft,
   ArrowDownCircle,
   ArrowUpCircle,
   Check,
   FilterX,
+  MoreHorizontal,
   Pencil,
   Plus,
   Scale,
@@ -40,6 +42,13 @@ type TransactionForm = {
   type: CategoryKind;
 };
 
+type AdjustmentEditForm = {
+  accountId: string;
+  amount: string;
+  date: string;
+  description: string;
+};
+
 type TransactionFilters = {
   dateFrom: string;
   dateTo: string;
@@ -49,7 +58,7 @@ type TransactionFilters = {
   sortDir: "asc" | "desc";
 };
 
-type FormErrors = Partial<Record<keyof TransactionForm, string>>;
+type FormErrors = Partial<Record<keyof TransactionForm | keyof AdjustmentEditForm, string>>;
 
 const defaultFilters: TransactionFilters = {
   dateFrom: "",
@@ -71,9 +80,13 @@ function createInitialForm(categoryId = "", accountId = ""): TransactionForm {
   };
 }
 
+function parseAmountInput(value: string) {
+  return Number(value.trim().replace(/\s/g, "").replace(",", "."));
+}
+
 function validateForm(form: TransactionForm) {
   const errors: FormErrors = {};
-  const amount = Number(form.amount.trim().replace(/\s/g, "").replace(",", "."));
+  const amount = parseAmountInput(form.amount);
 
   if (!Number.isFinite(amount) || amount <= 0) {
     errors.amount = "Введите сумму больше нуля";
@@ -81,6 +94,29 @@ function validateForm(form: TransactionForm) {
 
   if (!form.categoryId) {
     errors.categoryId = "Выберите категорию";
+  }
+
+  if (!form.accountId) {
+    errors.accountId = "Выберите счет";
+  }
+
+  if (!form.date) {
+    errors.date = "Укажите дату";
+  }
+
+  return {
+    amount,
+    errors,
+    valid: Object.keys(errors).length === 0
+  };
+}
+
+function validateAdjustmentForm(form: AdjustmentEditForm) {
+  const errors: FormErrors = {};
+  const amount = parseAmountInput(form.amount);
+
+  if (!Number.isFinite(amount) || amount === 0) {
+    errors.amount = "Введите ненулевую сумму корректировки";
   }
 
   if (!form.accountId) {
@@ -151,10 +187,18 @@ export function TransactionsClient() {
   const [period, setPeriod] = useState(() => createPeriodState("month"));
   const [errors, setErrors] = useState<FormErrors>({});
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [openActionId, setOpenActionId] = useState<string | null>(null);
+  const [movingTransaction, setMovingTransaction] = useState<Transaction | null>(null);
+  const [moveAccountId, setMoveAccountId] = useState("");
+  const [adjustmentEdit, setAdjustmentEdit] = useState<{
+    id: string;
+    form: AdjustmentEditForm;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [accountsLoading, setAccountsLoading] = useState(true);
   const [categoriesLoading, setCategoriesLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [moving, setMoving] = useState(false);
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<"neutral" | "success" | "error">("neutral");
 
@@ -278,16 +322,31 @@ export function TransactionsClient() {
       "";
     setForm(createInitialForm(expenseCategory, accounts[0]?.id ?? ""));
     setEditingId(null);
+    setAdjustmentEdit(null);
     setErrors({});
   }
 
   function editTransaction(transaction: Transaction) {
+    setOpenActionId(null);
+
     if (transaction.type === "ADJUSTMENT") {
-      setMessage("Корректировку нельзя редактировать как обычную операцию");
-      setMessageTone("error");
+      setEditingId(null);
+      setAdjustmentEdit({
+        id: transaction.id,
+        form: {
+          accountId: transaction.accountId ?? "",
+          amount: String(transaction.amount),
+          date: toDateInputValue(transaction.date),
+          description: transaction.description ?? ""
+        }
+      });
+      setErrors({});
+      setMessage("");
+      window.scrollTo({ top: 0, behavior: "smooth" });
       return;
     }
 
+    setAdjustmentEdit(null);
     setEditingId(transaction.id);
     setForm({
       accountId: transaction.accountId ?? "",
@@ -299,6 +358,110 @@ export function TransactionsClient() {
     });
     setErrors({});
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function startMoveTransaction(transaction: Transaction) {
+    const nextAccount =
+      accounts.find((account) => account.id !== transaction.accountId) ??
+      accounts.find((account) => account.id === transaction.accountId) ??
+      accounts[0];
+
+    setOpenActionId(null);
+    setMovingTransaction(transaction);
+    setMoveAccountId(nextAccount?.id ?? "");
+    setMessage("");
+  }
+
+  async function saveAdjustmentEdit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!adjustmentEdit) {
+      return;
+    }
+
+    const validation = validateAdjustmentForm(adjustmentEdit.form);
+    setErrors(validation.errors);
+
+    if (!validation.valid) {
+      setMessage("Проверьте поля корректировки");
+      setMessageTone("error");
+      return;
+    }
+
+    setSaving(true);
+    setMessage("");
+
+    try {
+      const response = await fetch(`/api/transactions/${adjustmentEdit.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...adjustmentEdit.form,
+          amount: validation.amount,
+          type: "ADJUSTMENT"
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const accountData = await fetchAccounts();
+      setAccounts(accountData.accounts);
+      await loadTransactions();
+      setAdjustmentEdit(null);
+      setMessage("Корректировка обновлена");
+      setMessageTone("success");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Не удалось обновить корректировку");
+      setMessageTone("error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function moveTransaction(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!movingTransaction || !moveAccountId) {
+      setMessage("Выберите счет для переноса");
+      setMessageTone("error");
+      return;
+    }
+
+    if (movingTransaction.accountId === moveAccountId) {
+      setMessage("Операция уже находится на этом счете");
+      setMessageTone("error");
+      return;
+    }
+
+    setMoving(true);
+    setMessage("");
+
+    try {
+      const response = await fetch(`/api/transactions/${movingTransaction.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountId: moveAccountId })
+      });
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const accountData = await fetchAccounts();
+      setAccounts(accountData.accounts);
+      await loadTransactions();
+      setMovingTransaction(null);
+      setMoveAccountId("");
+      setMessage("Операция перенесена на другой счет");
+      setMessageTone("success");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Не удалось перенести операцию");
+      setMessageTone("error");
+    } finally {
+      setMoving(false);
+    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -366,6 +529,8 @@ export function TransactionsClient() {
   }
 
   async function deleteTransaction(id: string) {
+    setOpenActionId(null);
+
     const confirmed = window.confirm("Удалить операцию?");
 
     if (!confirmed) {
@@ -387,6 +552,13 @@ export function TransactionsClient() {
       await loadTransactions();
       if (editingId === id) {
         resetForm();
+      }
+      if (movingTransaction?.id === id) {
+        setMovingTransaction(null);
+        setMoveAccountId("");
+      }
+      if (adjustmentEdit?.id === id) {
+        setAdjustmentEdit(null);
       }
       setMessage("Операция удалена");
       setMessageTone("success");
@@ -627,6 +799,202 @@ export function TransactionsClient() {
         </section>
 
         <section className="min-w-0 space-y-4">
+          {adjustmentEdit ? (
+            <div className="card p-4">
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold text-ink">
+                    Редактирование корректировки
+                  </h2>
+                  <p className="mt-1 text-sm text-muted">
+                    Корректировка влияет только на баланс счета.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setAdjustmentEdit(null);
+                    setErrors({});
+                  }}
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                  Отмена
+                </button>
+              </div>
+
+              <form className="grid gap-3 md:grid-cols-2" onSubmit={saveAdjustmentEdit}>
+                <div>
+                  <label className="field-label" htmlFor="adjustmentAmount">
+                    Сумма корректировки
+                  </label>
+                  <input
+                    id="adjustmentAmount"
+                    className="field mt-1"
+                    inputMode="decimal"
+                    value={adjustmentEdit.form.amount}
+                    onChange={(event) =>
+                      setAdjustmentEdit((current) =>
+                        current
+                          ? {
+                              ...current,
+                              form: { ...current.form, amount: event.target.value }
+                            }
+                          : current
+                      )
+                    }
+                    placeholder="Например, -500 или 1200"
+                  />
+                  <FieldError message={errors.amount} />
+                </div>
+
+                <div>
+                  <label className="field-label" htmlFor="adjustmentAccountId">
+                    Счет
+                  </label>
+                  <select
+                    id="adjustmentAccountId"
+                    className="field mt-1"
+                    value={adjustmentEdit.form.accountId}
+                    onChange={(event) =>
+                      setAdjustmentEdit((current) =>
+                        current
+                          ? {
+                              ...current,
+                              form: { ...current.form, accountId: event.target.value }
+                            }
+                          : current
+                      )
+                    }
+                    disabled={accountsLoading}
+                  >
+                    {accounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                  </select>
+                  <FieldError message={errors.accountId} />
+                </div>
+
+                <div>
+                  <label className="field-label" htmlFor="adjustmentDate">
+                    Дата
+                  </label>
+                  <input
+                    id="adjustmentDate"
+                    className="field mt-1"
+                    type="date"
+                    value={adjustmentEdit.form.date}
+                    onChange={(event) =>
+                      setAdjustmentEdit((current) =>
+                        current
+                          ? {
+                              ...current,
+                              form: { ...current.form, date: event.target.value }
+                            }
+                          : current
+                      )
+                    }
+                  />
+                  <FieldError message={errors.date} />
+                </div>
+
+                <div>
+                  <label className="field-label" htmlFor="adjustmentDescription">
+                    Комментарий
+                  </label>
+                  <input
+                    id="adjustmentDescription"
+                    className="field mt-1"
+                    value={adjustmentEdit.form.description}
+                    onChange={(event) =>
+                      setAdjustmentEdit((current) =>
+                        current
+                          ? {
+                              ...current,
+                              form: { ...current.form, description: event.target.value }
+                            }
+                          : current
+                      )
+                    }
+                    placeholder="Причина корректировки"
+                    maxLength={180}
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <button type="submit" className="btn-primary" disabled={saving}>
+                    <Check className="h-4 w-4" aria-hidden="true" />
+                    {saving ? "Сохранение" : "Сохранить корректировку"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          ) : null}
+
+          {movingTransaction ? (
+            <div className="card p-4">
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold text-ink">
+                    Перенести на другой счет
+                  </h2>
+                  <p className="mt-1 text-sm text-muted">
+                    {typeLabels[movingTransaction.type]} ·{" "}
+                    {transactionCategoryName(movingTransaction)} ·{" "}
+                    {formatCurrency(movingTransaction.amount)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setMovingTransaction(null);
+                    setMoveAccountId("");
+                  }}
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                  Отмена
+                </button>
+              </div>
+
+              <form className="grid gap-3 sm:grid-cols-[1fr_auto]" onSubmit={moveTransaction}>
+                <div>
+                  <label className="field-label" htmlFor="moveAccountId">
+                    Новый счет
+                  </label>
+                  <select
+                    id="moveAccountId"
+                    className="field mt-1"
+                    value={moveAccountId}
+                    onChange={(event) => setMoveAccountId(event.target.value)}
+                    disabled={moving || accountsLoading}
+                  >
+                    {accounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.type === "CREDIT_CARD"
+                          ? `${account.name} · долг ${formatCurrency(
+                              account.currentDebt,
+                              account.currency
+                            )}`
+                          : `${account.name} · ${formatCurrency(account.balance, account.currency)}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="submit"
+                  className="btn-primary self-end"
+                  disabled={moving || accounts.length === 0 || movingTransaction.accountId === moveAccountId}
+                >
+                  <ArrowRightLeft className="h-4 w-4" aria-hidden="true" />
+                  {moving ? "Перенос" : "Перенести"}
+                </button>
+              </form>
+            </div>
+          ) : null}
+
           <div className="card p-4">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <div>
@@ -782,27 +1150,60 @@ export function TransactionsClient() {
                         {formatCurrency(transaction.amount)}
                       </td>
                       <td>
-                        <div className="flex justify-end gap-2">
-                          {transaction.type === "ADJUSTMENT" ? null : (
-                            <button
-                              type="button"
-                              className="btn-secondary px-2"
-                              onClick={() => editTransaction(transaction)}
-                              aria-label="Редактировать операцию"
-                              title="Редактировать"
-                            >
-                              <Pencil className="h-4 w-4" aria-hidden="true" />
-                            </button>
-                          )}
+                        <div className="relative flex justify-end">
                           <button
                             type="button"
-                            className="btn-danger px-2"
-                            onClick={() => deleteTransaction(transaction.id)}
-                            aria-label="Удалить операцию"
-                            title="Удалить"
+                            className="btn-secondary px-2"
+                            onClick={() =>
+                              setOpenActionId((current) =>
+                                current === transaction.id ? null : transaction.id
+                              )
+                            }
+                            aria-label="Действия с операцией"
+                            title="Действия"
                           >
-                            <Trash2 className="h-4 w-4" aria-hidden="true" />
+                            <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
                           </button>
+
+                          {openActionId === transaction.id ? (
+                            <div className="absolute right-0 top-9 z-20 w-56 overflow-hidden rounded-md border border-line bg-panel py-1 text-left shadow-2xl">
+                              {transaction.type === "ADJUSTMENT" ? (
+                                <button
+                                  type="button"
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-muted"
+                                  onClick={() => editTransaction(transaction)}
+                                >
+                                  <Pencil className="h-4 w-4" aria-hidden="true" />
+                                  Редактировать
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-ink transition hover:bg-hover"
+                                  onClick={() => editTransaction(transaction)}
+                                >
+                                  <Pencil className="h-4 w-4" aria-hidden="true" />
+                                  Редактировать
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="flex w-full items-center gap-2 px-3 py-2 text-sm text-ink transition hover:bg-hover"
+                                onClick={() => startMoveTransaction(transaction)}
+                              >
+                                <ArrowRightLeft className="h-4 w-4" aria-hidden="true" />
+                                Перенести на другой счет
+                              </button>
+                              <button
+                                type="button"
+                                className="flex w-full items-center gap-2 px-3 py-2 text-sm text-loss transition hover:bg-loss/10"
+                                onClick={() => deleteTransaction(transaction.id)}
+                              >
+                                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                                Удалить
+                              </button>
+                            </div>
+                          ) : null}
                         </div>
                       </td>
                     </tr>
