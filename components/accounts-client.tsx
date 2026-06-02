@@ -37,6 +37,15 @@ type AdjustmentForm = {
   description: string;
 };
 
+type DeleteFlow = {
+  account: Account;
+  step: "choices" | "move" | "destroy";
+  targetAccountId: string;
+  confirmText: string;
+  saving: boolean;
+  error: string;
+};
+
 type FormErrors = Partial<Record<keyof AccountForm | keyof TransferForm | "adjustment", string>>;
 
 const initialAccountForm: AccountForm = {
@@ -91,6 +100,19 @@ function createAdjustmentForm(accounts: Account[]): AdjustmentForm {
   };
 }
 
+function getLinkedDataCount(account: Account) {
+  return (
+    (account._count?.transactions ?? 0) +
+    (account._count?.linkedLoans ?? 0) +
+    (account._count?.outgoingTransfers ?? 0) +
+    (account._count?.incomingTransfers ?? 0)
+  );
+}
+
+function getTransferCount(account: Account) {
+  return (account._count?.outgoingTransfers ?? 0) + (account._count?.incomingTransfers ?? 0);
+}
+
 export function AccountsClient() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
@@ -105,6 +127,7 @@ export function AccountsClient() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [adjusting, setAdjusting] = useState(false);
+  const [deleteFlow, setDeleteFlow] = useState<DeleteFlow | null>(null);
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<"neutral" | "success" | "error">("neutral");
   const adjustmentSectionRef = useRef<HTMLDivElement | null>(null);
@@ -262,6 +285,22 @@ export function AccountsClient() {
   }
 
   async function deleteAccount(account: Account) {
+    const sameTypeTarget =
+      accounts.find((item) => item.id !== account.id && item.type === account.type) ?? null;
+
+    if (getLinkedDataCount(account) > 0 || accounts.length <= 1) {
+      setDeleteFlow({
+        account,
+        step: "choices",
+        targetAccountId: sameTypeTarget?.id ?? "",
+        confirmText: "",
+        saving: false,
+        error: ""
+      });
+      setMessage("");
+      return;
+    }
+
     const confirmed = window.confirm(`Удалить счет «${account.name}»?`);
 
     if (!confirmed) {
@@ -272,7 +311,21 @@ export function AccountsClient() {
       const response = await fetch(`/api/accounts/${account.id}`, { method: "DELETE" });
 
       if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
+        const errorMessage = await readErrorMessage(response);
+
+        if (response.status === 409) {
+          setDeleteFlow({
+            account,
+            step: "choices",
+            targetAccountId: sameTypeTarget?.id ?? "",
+            confirmText: "",
+            saving: false,
+            error: errorMessage
+          });
+          return;
+        }
+
+        throw new Error(errorMessage);
       }
 
       await loadData(false);
@@ -281,6 +334,97 @@ export function AccountsClient() {
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Не удалось удалить счет");
       setMessageTone("error");
+    }
+  }
+
+  async function moveDataAndDeleteAccount() {
+    if (!deleteFlow) {
+      return;
+    }
+
+    setDeleteFlow((current) =>
+      current ? { ...current, saving: true, error: "" } : current
+    );
+
+    try {
+      const response = await fetch(`/api/accounts/${deleteFlow.account.id}/delete-options`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "MOVE_DATA",
+          targetAccountId: deleteFlow.targetAccountId,
+          confirmLastAccount: accounts.length <= 1
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      await loadData(false);
+      setDeleteFlow(null);
+      setMessage("Данные перенесены, счет удален");
+      setMessageTone("success");
+      window.dispatchEvent(new Event("finance-data-changed"));
+    } catch (error) {
+      setDeleteFlow((current) =>
+        current
+          ? {
+              ...current,
+              saving: false,
+              error: error instanceof Error ? error.message : "Не удалось перенести данные"
+            }
+          : current
+      );
+    }
+  }
+
+  async function deleteAccountWithData() {
+    if (!deleteFlow) {
+      return;
+    }
+
+    if (deleteFlow.confirmText !== "УДАЛИТЬ") {
+      setDeleteFlow((current) =>
+        current ? { ...current, error: "Введите УДАЛИТЬ для подтверждения" } : current
+      );
+      return;
+    }
+
+    setDeleteFlow((current) =>
+      current ? { ...current, saving: true, error: "" } : current
+    );
+
+    try {
+      const response = await fetch(`/api/accounts/${deleteFlow.account.id}/delete-options`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "DELETE_WITH_DATA",
+          confirm: true,
+          confirmLastAccount: accounts.length <= 1
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      await loadData(false);
+      setDeleteFlow(null);
+      setMessage("Счет и связанные операции удалены");
+      setMessageTone("success");
+      window.dispatchEvent(new Event("finance-data-changed"));
+    } catch (error) {
+      setDeleteFlow((current) =>
+        current
+          ? {
+              ...current,
+              saving: false,
+              error: error instanceof Error ? error.message : "Не удалось удалить данные"
+            }
+          : current
+      );
     }
   }
 
@@ -412,9 +556,239 @@ export function AccountsClient() {
     });
   }
 
+  const deleteTargetAccounts = deleteFlow
+    ? accounts.filter(
+        (account) =>
+          account.id !== deleteFlow.account.id && account.type === deleteFlow.account.type
+      )
+    : [];
+  const deleteFlowLinkedCount = deleteFlow ? getLinkedDataCount(deleteFlow.account) : 0;
+  const deleteFlowTransferCount = deleteFlow ? getTransferCount(deleteFlow.account) : 0;
+  const deleteFlowHasLinkedDebt = (deleteFlow?.account._count?.linkedLoans ?? 0) > 0;
+  const canMoveDeleteFlow = deleteTargetAccounts.length > 0;
+  const canDestroyDeleteFlow =
+    !!deleteFlow && deleteFlow.confirmText === "УДАЛИТЬ" && !deleteFlowHasLinkedDebt;
+
   return (
     <div>
       <PageHeader title="Счета" description="Баланс по счетам, наличным и картам." />
+
+      {deleteFlow ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6">
+          <div className="w-full max-w-lg rounded-md border border-line bg-paper p-5 shadow-soft">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold text-ink">
+                  У этого счета есть операции, переводы или долги. Что сделать?
+                </h2>
+                <p className="mt-1 text-sm text-muted">
+                  Счет: {deleteFlow.account.name}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-secondary h-9 w-9 min-h-0 p-0"
+                onClick={() => setDeleteFlow(null)}
+                aria-label="Закрыть"
+                title="Закрыть"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="mt-4 rounded-md border border-line bg-soft/30 px-3 py-3 text-sm text-muted">
+              Операций: {deleteFlow.account._count?.transactions ?? 0} · Переводов:{" "}
+              {deleteFlowTransferCount} · Долгов: {deleteFlow.account._count?.linkedLoans ?? 0}
+              {accounts.length <= 1 ? " · Последний счет" : ""}
+            </div>
+
+            {deleteFlow.error ? (
+              <div className="mt-4 rounded-md border border-loss/30 bg-loss/10 px-3 py-2 text-sm text-loss">
+                {deleteFlow.error}
+              </div>
+            ) : null}
+
+            {deleteFlow.step === "choices" ? (
+              <div className="mt-5 space-y-3">
+                <button
+                  type="button"
+                  className="btn-secondary w-full justify-start"
+                  disabled={!canMoveDeleteFlow || deleteFlow.saving}
+                  onClick={() =>
+                    setDeleteFlow((current) =>
+                      current
+                        ? {
+                            ...current,
+                            step: "move",
+                            targetAccountId:
+                              deleteTargetAccounts[0]?.id ?? current.targetAccountId,
+                            error: ""
+                          }
+                        : current
+                    )
+                  }
+                >
+                  Перенести данные на другой счет
+                </button>
+                {!canMoveDeleteFlow ? (
+                  <p className="text-sm text-muted">
+                    Нет другого счета того же типа для переноса.
+                  </p>
+                ) : null}
+
+                <button
+                  type="button"
+                  className="btn-danger w-full justify-start"
+                  disabled={deleteFlow.saving}
+                  onClick={() =>
+                    setDeleteFlow((current) =>
+                      current
+                        ? {
+                            ...current,
+                            step: "destroy",
+                            confirmText: "",
+                            error: ""
+                          }
+                        : current
+                    )
+                  }
+                >
+                  Удалить счет и связанные операции
+                </button>
+                {deleteFlowHasLinkedDebt ? (
+                  <p className="text-sm text-muted">
+                    У счета есть связанный долг. Долг не будет удален молча: перенесите данные
+                    на другой счет или отвяжите долг перед удалением.
+                  </p>
+                ) : null}
+
+                <button
+                  type="button"
+                  className="btn-secondary w-full"
+                  disabled={deleteFlow.saving}
+                  onClick={() => setDeleteFlow(null)}
+                >
+                  Отмена
+                </button>
+              </div>
+            ) : null}
+
+            {deleteFlow.step === "move" ? (
+              <div className="mt-5 space-y-4">
+                <div>
+                  <label className="field-label" htmlFor="deleteTargetAccountId">
+                    Куда перенести данные
+                  </label>
+                  <select
+                    id="deleteTargetAccountId"
+                    className="field mt-1"
+                    value={deleteFlow.targetAccountId}
+                    onChange={(event) =>
+                      setDeleteFlow((current) =>
+                        current
+                          ? { ...current, targetAccountId: event.target.value, error: "" }
+                          : current
+                      )
+                    }
+                    disabled={deleteFlow.saving}
+                  >
+                    {deleteTargetAccounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-2 text-sm text-muted">
+                    Операции и связанные долги будут перенесены. Переводы с этим счетом будут
+                    переназначены, а внутренние переводы между двумя объединяемыми счетами удалены.
+                  </p>
+                </div>
+
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <button
+                    type="button"
+                    className="btn-primary flex-1"
+                    disabled={!deleteFlow.targetAccountId || deleteFlow.saving}
+                    onClick={moveDataAndDeleteAccount}
+                  >
+                    {deleteFlow.saving ? "Перенос" : "Перенести и удалить"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary flex-1"
+                    disabled={deleteFlow.saving}
+                    onClick={() =>
+                      setDeleteFlow((current) =>
+                        current ? { ...current, step: "choices", error: "" } : current
+                      )
+                    }
+                  >
+                    Назад
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {deleteFlow.step === "destroy" ? (
+              <div className="mt-5 space-y-4">
+                <div className="rounded-md border border-loss/30 bg-loss/10 px-3 py-3 text-sm text-loss">
+                  Это удалит счет, операции и связанные данные. Действие нельзя отменить.
+                </div>
+
+                {deleteFlowHasLinkedDebt ? (
+                  <div className="rounded-md border border-line bg-soft/30 px-3 py-3 text-sm text-muted">
+                    У счета есть связанный долг. Для безопасности сначала перенесите данные на
+                    другой счет или отвяжите долг.
+                  </div>
+                ) : null}
+
+                <div>
+                  <label className="field-label" htmlFor="deleteConfirmText">
+                    Введите УДАЛИТЬ
+                  </label>
+                  <input
+                    id="deleteConfirmText"
+                    className="field mt-1"
+                    value={deleteFlow.confirmText}
+                    onChange={(event) =>
+                      setDeleteFlow((current) =>
+                        current
+                          ? { ...current, confirmText: event.target.value, error: "" }
+                          : current
+                      )
+                    }
+                    disabled={deleteFlow.saving || deleteFlowHasLinkedDebt}
+                    autoComplete="off"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <button
+                    type="button"
+                    className="btn-danger flex-1"
+                    disabled={!canDestroyDeleteFlow || deleteFlow.saving}
+                    onClick={deleteAccountWithData}
+                  >
+                    {deleteFlow.saving ? "Удаление" : "Удалить счет и данные"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary flex-1"
+                    disabled={deleteFlow.saving}
+                    onClick={() =>
+                      setDeleteFlow((current) =>
+                        current ? { ...current, step: "choices", error: "" } : current
+                      )
+                    }
+                  >
+                    Назад
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       <div className="mb-6 grid gap-4 md:grid-cols-2">
         <StatCard
