@@ -6,7 +6,6 @@ import {
   ArrowUpCircle,
   Check,
   FilterX,
-  MoreHorizontal,
   Pencil,
   Plus,
   Scale,
@@ -187,7 +186,6 @@ export function TransactionsClient() {
   const [period, setPeriod] = useState(() => createPeriodState("month"));
   const [errors, setErrors] = useState<FormErrors>({});
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [openActionId, setOpenActionId] = useState<string | null>(null);
   const [movingTransaction, setMovingTransaction] = useState<Transaction | null>(null);
   const [moveAccountId, setMoveAccountId] = useState("");
   const [adjustmentEdit, setAdjustmentEdit] = useState<{
@@ -327,8 +325,6 @@ export function TransactionsClient() {
   }
 
   function editTransaction(transaction: Transaction) {
-    setOpenActionId(null);
-
     if (transaction.type === "ADJUSTMENT") {
       setEditingId(null);
       setAdjustmentEdit({
@@ -366,7 +362,6 @@ export function TransactionsClient() {
       accounts.find((account) => account.id === transaction.accountId) ??
       accounts[0];
 
-    setOpenActionId(null);
     setMovingTransaction(transaction);
     setMoveAccountId(nextAccount?.id ?? "");
     setMessage("");
@@ -529,8 +524,6 @@ export function TransactionsClient() {
   }
 
   async function deleteTransaction(id: string) {
-    setOpenActionId(null);
-
     const confirmed = window.confirm("Удалить операцию?");
 
     if (!confirmed) {
@@ -1150,60 +1143,39 @@ export function TransactionsClient() {
                         {formatCurrency(transaction.amount)}
                       </td>
                       <td>
-                        <div className="relative flex justify-end">
+                        <div className="flex justify-end gap-2">
                           <button
                             type="button"
-                            className="btn-secondary px-2"
-                            onClick={() =>
-                              setOpenActionId((current) =>
-                                current === transaction.id ? null : transaction.id
-                              )
-                            }
-                            aria-label="Действия с операцией"
-                            title="Действия"
+                            className="btn-secondary px-2 xl:px-3"
+                            onClick={() => editTransaction(transaction)}
+                            aria-label="Редактировать операцию"
+                            title="Редактировать"
                           >
-                            <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+                            <Pencil className="h-4 w-4" aria-hidden="true" />
+                            <span className="hidden xl:inline">Редактировать</span>
                           </button>
-
-                          {openActionId === transaction.id ? (
-                            <div className="absolute right-0 top-9 z-20 w-56 overflow-hidden rounded-md border border-line bg-panel py-1 text-left shadow-2xl">
-                              {transaction.type === "ADJUSTMENT" ? (
-                                <button
-                                  type="button"
-                                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-muted"
-                                  onClick={() => editTransaction(transaction)}
-                                >
-                                  <Pencil className="h-4 w-4" aria-hidden="true" />
-                                  Редактировать
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-ink transition hover:bg-hover"
-                                  onClick={() => editTransaction(transaction)}
-                                >
-                                  <Pencil className="h-4 w-4" aria-hidden="true" />
-                                  Редактировать
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                className="flex w-full items-center gap-2 px-3 py-2 text-sm text-ink transition hover:bg-hover"
-                                onClick={() => startMoveTransaction(transaction)}
-                              >
-                                <ArrowRightLeft className="h-4 w-4" aria-hidden="true" />
-                                Перенести на другой счет
-                              </button>
-                              <button
-                                type="button"
-                                className="flex w-full items-center gap-2 px-3 py-2 text-sm text-loss transition hover:bg-loss/10"
-                                onClick={() => deleteTransaction(transaction.id)}
-                              >
-                                <Trash2 className="h-4 w-4" aria-hidden="true" />
-                                Удалить
-                              </button>
-                            </div>
+                          {accounts.length > 1 ? (
+                            <button
+                              type="button"
+                              className="btn-secondary px-2 xl:px-3"
+                              onClick={() => startMoveTransaction(transaction)}
+                              aria-label="Перенести на другой счет"
+                              title="Перенести на другой счет"
+                            >
+                              <ArrowRightLeft className="h-4 w-4" aria-hidden="true" />
+                              <span className="hidden xl:inline">Перенести</span>
+                            </button>
                           ) : null}
+                          <button
+                            type="button"
+                            className="btn-danger px-2 xl:px-3"
+                            onClick={() => deleteTransaction(transaction.id)}
+                            aria-label="Удалить операцию"
+                            title="Удалить"
+                          >
+                            <Trash2 className="h-4 w-4" aria-hidden="true" />
+                            <span className="hidden xl:inline">Удалить</span>
+                          </button>
                         </div>
                       </td>
                     </tr>
