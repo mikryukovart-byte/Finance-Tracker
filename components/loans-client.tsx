@@ -990,6 +990,24 @@ export function LoansClient() {
 
                         {isCreditCard ? (
                           <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                            <div className="rounded-md border border-line bg-soft/30 px-3 py-3 sm:col-span-2 xl:col-span-1">
+                              <div
+                                className={`text-xs font-medium uppercase tracking-normal ${
+                                  availableCredit >= 0 ? "text-muted" : "text-loss"
+                                }`}
+                              >
+                                {availableCredit >= 0
+                                  ? "Доступно сейчас"
+                                  : "Превышение лимита"}
+                              </div>
+                              <div
+                                className={`mt-1 font-semibold ${
+                                  availableCredit >= 0 ? "text-ink" : "text-loss"
+                                }`}
+                              >
+                                {formatCurrency(Math.abs(availableCredit))}
+                              </div>
+                            </div>
                             <div>
                               <div className="text-xs text-muted">Кредитный лимит</div>
                               <div className="font-medium text-ink">
@@ -1000,18 +1018,6 @@ export function LoansClient() {
                               <div className="text-xs text-muted">Текущая задолженность</div>
                               <div className="font-medium text-loss">
                                 {formatCurrency(currentDebt)}
-                              </div>
-                            </div>
-                            <div>
-                              <div className="text-xs text-muted">
-                                {availableCredit >= 0 ? "Доступно" : "Превышение лимита"}
-                              </div>
-                              <div
-                                className={`font-medium ${
-                                  availableCredit >= 0 ? "text-ink" : "text-loss"
-                                }`}
-                              >
-                                {formatCurrency(Math.abs(availableCredit))}
                               </div>
                             </div>
                             <div>

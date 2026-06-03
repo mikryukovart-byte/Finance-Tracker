@@ -564,26 +564,34 @@ export function DashboardClient() {
                       {account.name}
                       {account.type === "CREDIT_CARD" ? " · кредитная карта" : ""}
                     </div>
-                    <div
-                      className={`mt-1 text-lg font-semibold ${
-                        account.type === "CREDIT_CARD" ? "text-loss" : "text-ink"
-                      }`}
-                    >
-                      {account.type === "CREDIT_CARD"
-                        ? formatCurrency(account.currentDebt, account.currency)
-                        : formatCurrency(account.balance, account.currency)}
-                    </div>
                     {account.type === "CREDIT_CARD" ? (
-                      <div className="mt-1 space-y-1 text-xs text-muted">
+                      <div className="mt-3">
+                        <div
+                          className={`text-xs font-medium uppercase tracking-normal ${
+                            availableCredit >= 0 ? "text-muted" : "text-loss"
+                          }`}
+                        >
+                          {availableCredit >= 0 ? "Доступно сейчас" : "Превышение лимита"}
+                        </div>
+                        <div
+                          className={`mt-1 text-lg font-semibold ${
+                            availableCredit >= 0 ? "text-ink" : "text-loss"
+                          }`}
+                        >
+                          {formatCurrency(Math.abs(availableCredit), account.currency)}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-1 text-lg font-semibold text-ink">
+                        {formatCurrency(account.balance, account.currency)}
+                      </div>
+                    )}
+                    {account.type === "CREDIT_CARD" ? (
+                      <div className="mt-2 space-y-1 text-xs text-muted">
                         <div>Долг: {formatCurrency(account.currentDebt, account.currency)}</div>
-                        {availableCredit >= 0 ? (
-                          <div>Доступно: {formatCurrency(availableCredit, account.currency)}</div>
-                        ) : (
-                          <div className="text-loss">
-                            Превышение лимита:{" "}
-                            {formatCurrency(Math.abs(availableCredit), account.currency)}
-                          </div>
-                        )}
+                        <div>
+                          Лимит: {formatCurrency(account.creditLimit ?? 0, account.currency)}
+                        </div>
                       </div>
                     ) : null}
                   </div>

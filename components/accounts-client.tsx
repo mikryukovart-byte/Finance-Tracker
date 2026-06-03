@@ -1222,15 +1222,28 @@ export function AccountsClient() {
                         {account.type === "CREDIT_CARD" ? "Кредитная карта" : "Обычный счет"} ·{" "}
                         {account.currency}
                       </div>
-                      <div
-                        className={`mt-4 text-2xl font-semibold ${
-                          account.type === "CREDIT_CARD" ? "text-loss" : "text-ink"
-                        }`}
-                      >
-                        {account.type === "CREDIT_CARD"
-                          ? formatCurrency(account.currentDebt, account.currency)
-                          : formatCurrency(account.balance, account.currency)}
-                      </div>
+                      {account.type === "CREDIT_CARD" ? (
+                        <div className="mt-4 rounded-md border border-line bg-soft/30 px-3 py-3">
+                          <div
+                            className={`text-xs font-medium uppercase tracking-normal ${
+                              availableLimit >= 0 ? "text-muted" : "text-loss"
+                            }`}
+                          >
+                            {availableLimit >= 0 ? "Доступно сейчас" : "Превышение лимита"}
+                          </div>
+                          <div
+                            className={`mt-1 text-2xl font-semibold ${
+                              availableLimit >= 0 ? "text-ink" : "text-loss"
+                            }`}
+                          >
+                            {formatCurrency(Math.abs(availableLimit), account.currency)}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-4 text-2xl font-semibold text-ink">
+                          {formatCurrency(account.balance, account.currency)}
+                        </div>
+                      )}
                       {account.type === "CREDIT_CARD" ? (
                         <div className="mt-3 grid gap-1 text-sm text-muted">
                           <div>
@@ -1241,16 +1254,6 @@ export function AccountsClient() {
                             Текущая задолженность:{" "}
                             {formatCurrency(account.currentDebt ?? 0, account.currency)}
                           </div>
-                          {availableLimit >= 0 ? (
-                            <div>
-                              Доступно: {formatCurrency(availableLimit, account.currency)}
-                            </div>
-                          ) : (
-                            <div className="text-loss">
-                              Превышение лимита:{" "}
-                              {formatCurrency(Math.abs(availableLimit), account.currency)}
-                            </div>
-                          )}
                           {account.minimalPayment ? (
                             <div>
                               Минимальный платеж:{" "}
