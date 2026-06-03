@@ -2,10 +2,6 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-function cardBalance(currentDebt) {
-  return -Math.max(0, currentDebt);
-}
-
 async function main() {
   const creditCards = await prisma.loan.findMany({
     where: { debtType: "CREDIT_CARD" },
@@ -20,13 +16,17 @@ async function main() {
 
   for (const loan of creditCards) {
     await prisma.$transaction(async (tx) => {
+      const creditLimit = loan.creditLimit ?? loan.initialAmount ?? 0;
+
       const cardData = {
         type: "CREDIT_CARD",
-        balance: cardBalance(loan.remainingAmount),
-        creditLimit: loan.creditLimit ?? loan.initialAmount,
+        balance: 0,
+        creditLimit,
         currentDebt: loan.remainingAmount,
+        availableCredit: 0,
         minimalPayment: loan.minimalPayment ?? loan.monthlyPayment,
-        paymentDate: loan.paymentDate
+        paymentDate: loan.paymentDate,
+        interestRate: loan.interestRate
       };
 
       if (loan.accountId) {

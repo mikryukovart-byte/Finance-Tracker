@@ -67,8 +67,7 @@ export async function POST(request: Request) {
   try {
     const currentDebt =
       parsed.data.type === "CREDIT_CARD" ? parsed.data.currentDebt ?? 0 : 0;
-    const openingAmount =
-      parsed.data.type === "CREDIT_CARD" ? -currentDebt : parsed.data.balance;
+    const openingAmount = parsed.data.type === "CREDIT_CARD" ? 0 : parsed.data.balance;
     const account = await prisma.$transaction(async (tx) => {
       const saved = await tx.account.create({
         data: {
@@ -78,9 +77,12 @@ export async function POST(request: Request) {
           balance: 0,
           currency: parsed.data.currency,
           creditLimit: parsed.data.type === "CREDIT_CARD" ? parsed.data.creditLimit : null,
-          currentDebt: 0,
+          currentDebt,
+          availableCredit:
+            parsed.data.type === "CREDIT_CARD" ? parsed.data.availableCredit ?? 0 : 0,
           minimalPayment: parsed.data.type === "CREDIT_CARD" ? parsed.data.minimalPayment : null,
-          paymentDate: parsed.data.type === "CREDIT_CARD" ? parsed.data.paymentDate : null
+          paymentDate: parsed.data.type === "CREDIT_CARD" ? parsed.data.paymentDate : null,
+          interestRate: parsed.data.type === "CREDIT_CARD" ? parsed.data.interestRate : null
         }
       });
 

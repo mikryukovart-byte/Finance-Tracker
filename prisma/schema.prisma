@@ -31,8 +31,10 @@ model Account {
   currency          String        @default("RUB")
   creditLimit       Float?
   currentDebt       Float         @default(0)
+  availableCredit   Float         @default(0)
   minimalPayment    Float?
   paymentDate       DateTime?
+  interestRate      Float?
   transactions      Transaction[]
   linkedLoans       Loan[]
   outgoingTransfers Transfer[]    @relation("TransferFromAccount")

@@ -444,10 +444,10 @@ export function DashboardClient() {
               {accounts.map((account) => (
                 <option key={account.id} value={account.id}>
                   {account.type === "CREDIT_CARD"
-                    ? `${account.name} · долг ${formatCurrency(
-                        account.currentDebt,
+                    ? `${account.name} · доступно ${formatCurrency(
+                        account.availableCredit,
                         account.currency
-                      )}`
+                      )} · долг ${formatCurrency(account.currentDebt, account.currency)}`
                     : `${account.name} · ${formatCurrency(account.balance, account.currency)}`}
                 </option>
               ))}
@@ -556,7 +556,8 @@ export function DashboardClient() {
               </div>
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {stats.accounts.map((account) => {
-                  const availableCredit = (account.creditLimit ?? 0) - account.currentDebt;
+                  const availableCredit = account.availableCredit ?? 0;
+                  const overLimit = Math.max(0, account.currentDebt - (account.creditLimit ?? 0));
 
                   return (
                   <div key={account.id} className="rounded-md border border-line p-3">
@@ -567,18 +568,12 @@ export function DashboardClient() {
                     {account.type === "CREDIT_CARD" ? (
                       <div className="mt-3">
                         <div
-                          className={`text-xs font-medium uppercase tracking-normal ${
-                            availableCredit >= 0 ? "text-muted" : "text-loss"
-                          }`}
+                          className="text-xs font-medium uppercase tracking-normal text-muted"
                         >
-                          {availableCredit >= 0 ? "Доступно сейчас" : "Превышение лимита"}
+                          Доступно сейчас
                         </div>
-                        <div
-                          className={`mt-1 text-lg font-semibold ${
-                            availableCredit >= 0 ? "text-ink" : "text-loss"
-                          }`}
-                        >
-                          {formatCurrency(Math.abs(availableCredit), account.currency)}
+                        <div className="mt-1 text-lg font-semibold text-ink">
+                          {formatCurrency(availableCredit, account.currency)}
                         </div>
                       </div>
                     ) : (
@@ -592,6 +587,11 @@ export function DashboardClient() {
                         <div>
                           Лимит: {formatCurrency(account.creditLimit ?? 0, account.currency)}
                         </div>
+                        {overLimit > 0 ? (
+                          <div className="text-loss">
+                            Превышение лимита: {formatCurrency(overLimit, account.currency)}
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>

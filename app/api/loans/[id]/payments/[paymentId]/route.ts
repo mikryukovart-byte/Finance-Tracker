@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { applyTransactionEffect, getCreditCardBalance } from "@/lib/accounts";
+import { applyTransactionEffect } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
@@ -88,7 +88,10 @@ export async function DELETE(_request: Request, { params }: RouteContext) {
         where: { id: updatedLoan.accountId },
         data: {
           currentDebt: nextDebt,
-          balance: getCreditCardBalance(nextDebt)
+          availableCredit: {
+            decrement: appliedAmount
+          },
+          balance: 0
         }
       });
     }

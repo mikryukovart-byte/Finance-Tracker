@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { badRequest, readJsonBody } from "@/lib/api";
-import { findOwnedAccount, getCreditCardBalance } from "@/lib/accounts";
+import { findOwnedAccount } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { getDebtSummary } from "@/lib/debts";
 import { prisma } from "@/lib/prisma";
@@ -41,6 +41,21 @@ function normalizeLoanBody(body: Record<string, unknown>) {
     priority: body.priority ?? "MEDIUM",
     status: body.status ?? "ACTIVE"
   };
+}
+
+function parseAvailableCreditInput(body: Record<string, unknown>) {
+  const value = body.availableCredit;
+
+  if (value === "" || value === null || value === undefined) {
+    return null;
+  }
+
+  const parsed =
+    typeof value === "string"
+      ? Number(value.trim().replace(/\s/g, "").replace(",", "."))
+      : Number(value);
+
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : Number.NaN;
 }
 
 function loanErrorResponse(error: unknown) {
@@ -117,10 +132,17 @@ export async function POST(request: Request) {
     return badRequest();
   }
 
-  const parsed = loanSchema.safeParse(normalizeLoanBody(body as Record<string, unknown>));
+  const normalizedBody = normalizeLoanBody(body as Record<string, unknown>);
+  const parsed = loanSchema.safeParse(normalizedBody);
 
   if (!parsed.success) {
     return NextResponse.json({ message: firstZodError(parsed.error) }, { status: 400 });
+  }
+
+  const availableCreditInput = parseAvailableCreditInput(normalizedBody);
+
+  if (parsed.data.debtType === "CREDIT_CARD" && Number.isNaN(availableCreditInput)) {
+    return NextResponse.json({ message: "Введите корректное значение доступно сейчас" }, { status: 400 });
   }
 
   try {
@@ -148,13 +170,17 @@ export async function POST(request: Request) {
       });
 
       if (saved.debtType === "CREDIT_CARD") {
+        const creditLimit = saved.creditLimit ?? saved.initialAmount ?? 0;
+        const availableCredit = availableCreditInput ?? saved.account?.availableCredit ?? 0;
         const cardData = {
           type: "CREDIT_CARD",
-          balance: getCreditCardBalance(saved.remainingAmount),
-          creditLimit: saved.creditLimit ?? saved.initialAmount,
+          balance: 0,
+          creditLimit,
           currentDebt: saved.remainingAmount,
+          availableCredit,
           minimalPayment: saved.minimalPayment ?? saved.monthlyPayment,
-          paymentDate: saved.paymentDate
+          paymentDate: saved.paymentDate,
+          interestRate: saved.interestRate
         };
 
         if (saved.accountId) {

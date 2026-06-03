@@ -292,7 +292,10 @@ export function QuickTransactionInput({
             {accounts.map((account) => (
               <option key={account.id} value={account.id}>
                 {account.type === "CREDIT_CARD"
-                  ? `${account.name} · долг ${formatCurrency(account.currentDebt, account.currency)}`
+                  ? `${account.name} · доступно ${formatCurrency(
+                      account.availableCredit,
+                      account.currency
+                    )} · долг ${formatCurrency(account.currentDebt, account.currency)}`
                   : `${account.name} · ${formatCurrency(account.balance, account.currency)}`}
               </option>
             ))}

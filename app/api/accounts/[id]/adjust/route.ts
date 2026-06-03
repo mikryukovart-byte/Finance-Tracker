@@ -3,12 +3,15 @@ import { NextResponse } from "next/server";
 import { badRequest, readJsonBody } from "@/lib/api";
 import {
   adjustmentTransactionType,
-  applyTransactionEffect,
-  getCreditCardBalance
+  applyTransactionEffect
 } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { balanceAdjustmentSchema, firstZodError } from "@/lib/validation";
+import {
+  balanceAdjustmentSchema,
+  creditCardAdjustmentSchema,
+  firstZodError
+} from "@/lib/validation";
 
 type RouteContext = {
   params: {
@@ -29,12 +32,6 @@ export async function POST(request: Request, { params }: RouteContext) {
     return badRequest();
   }
 
-  const parsed = balanceAdjustmentSchema.safeParse(body);
-
-  if (!parsed.success) {
-    return NextResponse.json({ message: firstZodError(parsed.error) }, { status: 400 });
-  }
-
   const account = await prisma.account.findFirst({
     where: { id: params.id, userId: auth.userId }
   });
@@ -43,8 +40,48 @@ export async function POST(request: Request, { params }: RouteContext) {
     return NextResponse.json({ message: "Счет не найден" }, { status: 404 });
   }
 
-  const currentValue =
-    account.type === "CREDIT_CARD" ? getCreditCardBalance(account.currentDebt) : account.balance;
+  if (account.type === "CREDIT_CARD") {
+    const parsed = creditCardAdjustmentSchema.safeParse(body);
+
+    if (!parsed.success) {
+      return NextResponse.json({ message: firstZodError(parsed.error) }, { status: 400 });
+    }
+
+    try {
+      const updatedAccount = await prisma.account.update({
+        where: { id: account.id },
+        data: {
+          creditLimit: parsed.data.creditLimit,
+          currentDebt: parsed.data.currentDebt ?? 0,
+          availableCredit: parsed.data.availableCredit,
+          minimalPayment: parsed.data.minimalPayment,
+          paymentDate: parsed.data.paymentDate,
+          interestRate: parsed.data.interestRate,
+          balance: 0
+        }
+      });
+
+      return NextResponse.json({ account: updatedAccount, transaction: null }, { status: 200 });
+    } catch (error) {
+      console.error("Credit card adjustment API error", {
+        accountId: params.id,
+        userId: auth.userId,
+        error
+      });
+      return NextResponse.json(
+        { message: "Не удалось скорректировать кредитную карту" },
+        { status: 500 }
+      );
+    }
+  }
+
+  const parsed = balanceAdjustmentSchema.safeParse(body);
+
+  if (!parsed.success) {
+    return NextResponse.json({ message: firstZodError(parsed.error) }, { status: 400 });
+  }
+
+  const currentValue = account.balance;
   const difference = parsed.data.balance - currentValue;
 
   if (difference === 0) {

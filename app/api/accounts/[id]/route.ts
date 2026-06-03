@@ -51,7 +51,9 @@ export async function PUT(request: Request, { params }: RouteContext) {
             : null,
         minimalPayment:
           existing.type === "CREDIT_CARD" ? parsed.data.minimalPayment : null,
-        paymentDate: existing.type === "CREDIT_CARD" ? parsed.data.paymentDate : null
+        paymentDate: existing.type === "CREDIT_CARD" ? parsed.data.paymentDate : null,
+        interestRate: existing.type === "CREDIT_CARD" ? parsed.data.interestRate : null,
+        balance: existing.type === "CREDIT_CARD" ? 0 : existing.balance
       },
       include: {
         _count: {

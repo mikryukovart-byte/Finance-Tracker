@@ -3,7 +3,6 @@ import { NextResponse } from "next/server";
 import { badRequest, readJsonBody } from "@/lib/api";
 import {
   ensureDefaultAccount,
-  getCreditCardBalance,
   getTransactionImpact
 } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
@@ -145,15 +144,14 @@ export async function POST(request: Request) {
       const currentDebt = accountType === "CREDIT_CARD" ? account.currentDebt ?? 0 : 0;
       const accountData = {
         type: accountType,
-        balance:
-          accountType === "CREDIT_CARD"
-            ? getCreditCardBalance(currentDebt)
-            : account.balance,
+        balance: accountType === "CREDIT_CARD" ? 0 : account.balance,
         currency: account.currency,
         creditLimit: accountType === "CREDIT_CARD" ? account.creditLimit ?? null : null,
         currentDebt,
+        availableCredit: accountType === "CREDIT_CARD" ? account.availableCredit ?? 0 : 0,
         minimalPayment: accountType === "CREDIT_CARD" ? account.minimalPayment ?? null : null,
-        paymentDate: accountType === "CREDIT_CARD" ? account.paymentDate ?? null : null
+        paymentDate: accountType === "CREDIT_CARD" ? account.paymentDate ?? null : null,
+        interestRate: accountType === "CREDIT_CARD" ? account.interestRate ?? null : null
       };
       const existingById = account.id
         ? await tx.account.findFirst({

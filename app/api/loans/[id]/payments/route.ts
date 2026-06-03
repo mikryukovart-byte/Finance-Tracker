@@ -4,8 +4,7 @@ import { NextResponse } from "next/server";
 import { badRequest, readJsonBody } from "@/lib/api";
 import {
   applyTransactionEffect,
-  findOwnedAccount,
-  getCreditCardBalance
+  findOwnedAccount
 } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -153,7 +152,10 @@ export async function POST(request: Request, { params }: RouteContext) {
         where: { id: loan.accountId },
         data: {
           currentDebt: nextDebt,
-          balance: getCreditCardBalance(nextDebt)
+          availableCredit: {
+            increment: appliedAmount
+          },
+          balance: 0
         }
       });
     }

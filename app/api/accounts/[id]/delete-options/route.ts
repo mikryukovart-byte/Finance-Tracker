@@ -3,7 +3,6 @@ import { NextResponse } from "next/server";
 
 import {
   creditCardAccountType,
-  getCreditCardBalance,
   rollbackTransferEffect
 } from "@/lib/accounts";
 import { badRequest, readJsonBody } from "@/lib/api";
@@ -133,11 +132,13 @@ export async function POST(request: Request, { params }: RouteContext) {
 
         if (account.type === creditCardAccountType) {
           const currentDebt = targetAccount.currentDebt + account.currentDebt;
+          const availableCredit = targetAccount.availableCredit + account.availableCredit;
           await tx.account.update({
             where: { id: targetAccount.id },
             data: {
               currentDebt,
-              balance: getCreditCardBalance(currentDebt)
+              availableCredit,
+              balance: 0
             }
           });
         } else {

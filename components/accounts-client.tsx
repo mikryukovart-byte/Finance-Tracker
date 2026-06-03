@@ -18,8 +18,10 @@ type AccountForm = {
   currency: CurrencyCode;
   creditLimit: string;
   currentDebt: string;
+  availableCredit: string;
   minimalPayment: string;
   paymentDate: string;
+  interestRate: string;
 };
 
 type TransferForm = {
@@ -33,6 +35,12 @@ type TransferForm = {
 type AdjustmentForm = {
   accountId: string;
   balance: string;
+  creditLimit: string;
+  currentDebt: string;
+  availableCredit: string;
+  minimalPayment: string;
+  paymentDate: string;
+  interestRate: string;
   date: string;
   description: string;
 };
@@ -55,8 +63,10 @@ const initialAccountForm: AccountForm = {
   currency: "RUB",
   creditLimit: "",
   currentDebt: "0",
+  availableCredit: "0",
   minimalPayment: "",
-  paymentDate: ""
+  paymentDate: "",
+  interestRate: ""
 };
 
 function parseAmount(value: string) {
@@ -72,7 +82,11 @@ function parseOptionalAmount(value: string) {
 }
 
 function getAvailableLimit(account: Account) {
-  return (account.creditLimit ?? 0) - account.currentDebt;
+  return account.availableCredit ?? 0;
+}
+
+function getOverLimit(account: Account) {
+  return Math.max(0, account.currentDebt - (account.creditLimit ?? 0));
 }
 
 function getAssetBalance(accounts: Account[]) {
@@ -95,6 +109,34 @@ function createAdjustmentForm(accounts: Account[]): AdjustmentForm {
   return {
     accountId: accounts[0]?.id ?? "",
     balance: "",
+    creditLimit: "",
+    currentDebt: "",
+    availableCredit: "",
+    minimalPayment: "",
+    paymentDate: "",
+    interestRate: "",
+    date: toDateInputValue(),
+    description: ""
+  };
+}
+
+function createAdjustmentFormForAccount(account: Account | undefined): AdjustmentForm {
+  if (!account) {
+    return createAdjustmentForm([]);
+  }
+
+  return {
+    accountId: account.id,
+    balance: String(account.balance),
+    creditLimit: account.creditLimit ? String(account.creditLimit) : "",
+    currentDebt: String(account.currentDebt ?? 0),
+    availableCredit: String(account.availableCredit ?? 0),
+    minimalPayment: account.minimalPayment ? String(account.minimalPayment) : "",
+    paymentDate: account.paymentDate ? toDateInputValue(new Date(account.paymentDate)) : "",
+    interestRate:
+      account.interestRate !== null && account.interestRate !== undefined
+        ? String(account.interestRate)
+        : "",
     date: toDateInputValue(),
     description: ""
   };
@@ -172,10 +214,10 @@ export function AccountsClient() {
           : nextAccounts[1]?.id ?? nextAccounts[0]?.id ?? ""
       }));
       setAdjustmentForm((current) => ({
-        ...current,
-        accountId: nextAccounts.some((account) => account.id === current.accountId)
-          ? current.accountId
-          : nextAccounts[0]?.id ?? ""
+        ...createAdjustmentFormForAccount(
+          nextAccounts.find((account) => account.id === current.accountId) ?? nextAccounts[0]
+        ),
+        description: current.description
       }));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Не удалось загрузить счета");
@@ -204,8 +246,10 @@ export function AccountsClient() {
       currency: account.currency,
       creditLimit: account.creditLimit ? String(account.creditLimit) : "",
       currentDebt: String(account.currentDebt ?? 0),
+      availableCredit: String(account.availableCredit ?? 0),
       minimalPayment: account.minimalPayment ? String(account.minimalPayment) : "",
-      paymentDate: account.paymentDate ? toDateInputValue(new Date(account.paymentDate)) : ""
+      paymentDate: account.paymentDate ? toDateInputValue(new Date(account.paymentDate)) : "",
+      interestRate: account.interestRate !== null ? String(account.interestRate) : ""
     });
     setErrors({});
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -218,7 +262,9 @@ export function AccountsClient() {
     const balance = parseAmount(form.balance);
     const creditLimit = parseOptionalAmount(form.creditLimit);
     const currentDebt = parseAmount(form.currentDebt);
+    const availableCredit = parseAmount(form.availableCredit);
     const minimalPayment = parseOptionalAmount(form.minimalPayment);
+    const interestRate = parseOptionalAmount(form.interestRate);
 
     if (form.name.trim().length < 2) {
       nextErrors.name = "Название должно быть не короче 2 символов";
@@ -237,8 +283,16 @@ export function AccountsClient() {
         nextErrors.currentDebt = "Введите корректный текущий долг";
       }
 
+      if (!Number.isFinite(availableCredit) || availableCredit < 0) {
+        nextErrors.availableCredit = "Введите доступно сейчас";
+      }
+
       if (minimalPayment !== null && (!Number.isFinite(minimalPayment) || minimalPayment < 0)) {
         nextErrors.minimalPayment = "Введите корректный платеж";
+      }
+
+      if (interestRate !== null && (!Number.isFinite(interestRate) || interestRate < 0)) {
+        nextErrors.interestRate = "Введите корректный процент";
       }
     }
 
@@ -263,8 +317,10 @@ export function AccountsClient() {
           currency: form.currency,
           creditLimit,
           currentDebt: form.type === "CREDIT_CARD" ? currentDebt : 0,
+          availableCredit: form.type === "CREDIT_CARD" ? availableCredit : 0,
           minimalPayment,
-          paymentDate: form.type === "CREDIT_CARD" && form.paymentDate ? form.paymentDate : null
+          paymentDate: form.type === "CREDIT_CARD" && form.paymentDate ? form.paymentDate : null,
+          interestRate
         })
       });
 
@@ -488,10 +544,41 @@ export function AccountsClient() {
 
   async function adjustBalance(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const isCreditCard = selectedAdjustmentAccount?.type === "CREDIT_CARD";
     const balance = parseAmount(adjustmentForm.balance);
+    const creditLimit = parseOptionalAmount(adjustmentForm.creditLimit);
+    const currentDebt = parseAmount(adjustmentForm.currentDebt);
+    const availableCredit = parseAmount(adjustmentForm.availableCredit);
+    const minimalPayment = parseOptionalAmount(adjustmentForm.minimalPayment);
+    const interestRate = parseOptionalAmount(adjustmentForm.interestRate);
 
-    if (!adjustmentForm.accountId || !Number.isFinite(balance)) {
+    if (!adjustmentForm.accountId) {
+      setMessage("Выберите счет");
+      setMessageTone("error");
+      return;
+    }
+
+    if (!isCreditCard && !Number.isFinite(balance)) {
       setMessage("Выберите счет и укажите новый баланс");
+      setMessageTone("error");
+      return;
+    }
+
+    if (
+      isCreditCard &&
+      (
+        creditLimit === null ||
+        !Number.isFinite(creditLimit) ||
+        creditLimit <= 0 ||
+        !Number.isFinite(currentDebt) ||
+        currentDebt < 0 ||
+        !Number.isFinite(availableCredit) ||
+        availableCredit < 0 ||
+        (minimalPayment !== null && (!Number.isFinite(minimalPayment) || minimalPayment < 0)) ||
+        (interestRate !== null && (!Number.isFinite(interestRate) || interestRate < 0))
+      )
+    ) {
+      setMessage("Проверьте поля кредитной карты");
       setMessageTone("error");
       return;
     }
@@ -501,11 +588,22 @@ export function AccountsClient() {
       const response = await fetch(`/api/accounts/${adjustmentForm.accountId}/adjust`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          balance,
-          date: adjustmentForm.date,
-          description: adjustmentForm.description
-        })
+        body: JSON.stringify(
+          isCreditCard
+            ? {
+                creditLimit,
+                currentDebt,
+                availableCredit,
+                minimalPayment,
+                paymentDate: adjustmentForm.paymentDate || null,
+                interestRate
+              }
+            : {
+                balance,
+                date: adjustmentForm.date,
+                description: adjustmentForm.description
+              }
+        )
       });
 
       if (!response.ok) {
@@ -518,9 +616,9 @@ export function AccountsClient() {
       }
 
       await loadData(false);
-      setAdjustmentForm(createAdjustmentForm(accounts));
+      setAdjustmentForm(createAdjustmentForm([]));
       setActiveAdjustmentAccountId("");
-      setMessage("Баланс скорректирован");
+      setMessage(isCreditCard ? "Кредитная карта обновлена" : "Баланс скорректирован");
       setMessageTone("success");
       window.dispatchEvent(new Event("finance-data-changed"));
     } catch (error) {
@@ -533,15 +631,16 @@ export function AccountsClient() {
   }
 
   function startAdjustment(account: Account) {
-    const currentBalance = account.balance;
     setActiveAdjustmentAccountId(account.id);
     setAdjustmentForm((current) => ({
-      ...current,
-      accountId: account.id,
-      balance: String(currentBalance),
-      date: toDateInputValue()
+      ...createAdjustmentFormForAccount(account),
+      description: current.description
     }));
-    setMessage(`Введите желаемый баланс для счета «${account.name}»`);
+    setMessage(
+      account.type === "CREDIT_CARD"
+        ? `Обновите данные кредитной карты «${account.name}»`
+        : `Введите желаемый баланс для счета «${account.name}»`
+    );
     setMessageTone("neutral");
 
     window.requestAnimationFrame(() => {
@@ -939,9 +1038,32 @@ export function AccountsClient() {
                       placeholder="0"
                     />
                     <p className="mt-1 text-xs text-muted">
-                      Долг рассчитывается из операций и погашений.
+                      После создания меняется через корректировку кредитной карты.
                     </p>
                     <FieldError message={errors.currentDebt} />
+                  </div>
+                  <div>
+                    <label className="field-label" htmlFor="availableCredit">
+                      Доступно сейчас
+                    </label>
+                    <input
+                      id="availableCredit"
+                      className="field mt-1"
+                      disabled={Boolean(editingId)}
+                      inputMode="decimal"
+                      value={form.availableCredit}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          availableCredit: event.target.value
+                        }))
+                      }
+                      placeholder="0"
+                    />
+                    <p className="mt-1 text-xs text-muted">
+                      Это отдельное значение из банка, не формула лимит минус долг.
+                    </p>
+                    <FieldError message={errors.availableCredit} />
                   </div>
                   <div>
                     <label className="field-label" htmlFor="minimalPayment">
@@ -961,6 +1083,25 @@ export function AccountsClient() {
                       placeholder="Необязательно"
                     />
                     <FieldError message={errors.minimalPayment} />
+                  </div>
+                  <div>
+                    <label className="field-label" htmlFor="cardInterestRate">
+                      Процент
+                    </label>
+                    <input
+                      id="cardInterestRate"
+                      className="field mt-1"
+                      inputMode="decimal"
+                      value={form.interestRate}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          interestRate: event.target.value
+                        }))
+                      }
+                      placeholder="Необязательно"
+                    />
+                    <FieldError message={errors.interestRate} />
                   </div>
                   <div className="sm:col-span-2">
                     <label className="field-label" htmlFor="cardPaymentDate">
@@ -1100,7 +1241,11 @@ export function AccountsClient() {
               activeAdjustmentAccountId ? "ring-2 ring-accent/30" : ""
             }`}
           >
-            <h2 className="mb-4 text-lg font-semibold text-ink">Корректировка баланса</h2>
+            <h2 className="mb-4 text-lg font-semibold text-ink">
+              {selectedAdjustmentAccount?.type === "CREDIT_CARD"
+                ? "Корректировка кредитной карты"
+                : "Корректировка баланса"}
+            </h2>
             <Notice message={message} tone={messageTone} />
             <form className="space-y-4" onSubmit={adjustBalance}>
               <div>
@@ -1111,90 +1256,215 @@ export function AccountsClient() {
                   id="adjustAccount"
                   className="field mt-1"
                   value={adjustmentForm.accountId}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const account = accounts.find((item) => item.id === event.target.value);
                     setAdjustmentForm((current) => ({
-                      ...current,
-                      accountId: event.target.value
-                    }))
-                  }
+                      ...createAdjustmentFormForAccount(account),
+                      description: current.description
+                    }));
+                  }}
                 >
                   {accounts.map((account) => (
                     <option key={account.id} value={account.id}>
-                      {account.name} · {formatCurrency(account.balance, account.currency)}
+                      {account.type === "CREDIT_CARD"
+                        ? `${account.name} · доступно ${formatCurrency(
+                            account.availableCredit,
+                            account.currency
+                          )} · долг ${formatCurrency(account.currentDebt, account.currency)}`
+                        : `${account.name} · ${formatCurrency(account.balance, account.currency)}`}
                     </option>
                   ))}
                 </select>
               </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="field-label" htmlFor="adjustBalance">
-                    Желаемый баланс
-                  </label>
-                  <input
-                    id="adjustBalance"
-                    ref={adjustmentBalanceInputRef}
-                    className="field mt-1"
-                    inputMode="decimal"
-                    value={adjustmentForm.balance}
-                    onChange={(event) =>
-                      setAdjustmentForm((current) => ({
-                        ...current,
-                        balance: event.target.value
-                      }))
-                    }
-                    placeholder="0"
-                  />
-                  {selectedAdjustmentAccount ? (
-                    <p className="mt-1 text-xs text-muted">
-                      Сейчас:{" "}
-                      {formatCurrency(
-                        selectedAdjustmentAccount.balance,
-                        selectedAdjustmentAccount.currency
-                      )}
-                    </p>
-                  ) : null}
+              {selectedAdjustmentAccount?.type === "CREDIT_CARD" ? (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="field-label" htmlFor="adjustCreditLimit">
+                      Кредитный лимит
+                    </label>
+                    <input
+                      id="adjustCreditLimit"
+                      className="field mt-1"
+                      inputMode="decimal"
+                      value={adjustmentForm.creditLimit}
+                      onChange={(event) =>
+                        setAdjustmentForm((current) => ({
+                          ...current,
+                          creditLimit: event.target.value
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="field-label" htmlFor="adjustCurrentDebt">
+                      Текущая задолженность
+                    </label>
+                    <input
+                      id="adjustCurrentDebt"
+                      ref={adjustmentBalanceInputRef}
+                      className="field mt-1"
+                      inputMode="decimal"
+                      value={adjustmentForm.currentDebt}
+                      onChange={(event) =>
+                        setAdjustmentForm((current) => ({
+                          ...current,
+                          currentDebt: event.target.value
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="field-label" htmlFor="adjustAvailableCredit">
+                      Доступно сейчас
+                    </label>
+                    <input
+                      id="adjustAvailableCredit"
+                      className="field mt-1"
+                      inputMode="decimal"
+                      value={adjustmentForm.availableCredit}
+                      onChange={(event) =>
+                        setAdjustmentForm((current) => ({
+                          ...current,
+                          availableCredit: event.target.value
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="field-label" htmlFor="adjustMinimalPayment">
+                      Минимальный платеж
+                    </label>
+                    <input
+                      id="adjustMinimalPayment"
+                      className="field mt-1"
+                      inputMode="decimal"
+                      value={adjustmentForm.minimalPayment}
+                      onChange={(event) =>
+                        setAdjustmentForm((current) => ({
+                          ...current,
+                          minimalPayment: event.target.value
+                        }))
+                      }
+                      placeholder="Необязательно"
+                    />
+                  </div>
+                  <div>
+                    <label className="field-label" htmlFor="adjustPaymentDate">
+                      Дата платежа
+                    </label>
+                    <input
+                      id="adjustPaymentDate"
+                      className="field mt-1"
+                      type="date"
+                      value={adjustmentForm.paymentDate}
+                      onChange={(event) =>
+                        setAdjustmentForm((current) => ({
+                          ...current,
+                          paymentDate: event.target.value
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="field-label" htmlFor="adjustInterestRate">
+                      Процент
+                    </label>
+                    <input
+                      id="adjustInterestRate"
+                      className="field mt-1"
+                      inputMode="decimal"
+                      value={adjustmentForm.interestRate}
+                      onChange={(event) =>
+                        setAdjustmentForm((current) => ({
+                          ...current,
+                          interestRate: event.target.value
+                        }))
+                      }
+                      placeholder="Необязательно"
+                    />
+                  </div>
+                  <p className="text-xs text-muted sm:col-span-2">
+                    Эти значения берутся из банка. Доступно сейчас не считается из лимита и долга.
+                  </p>
                 </div>
-                <div>
-                  <label className="field-label" htmlFor="adjustDate">
-                    Дата
-                  </label>
-                  <input
-                    id="adjustDate"
-                    className="field mt-1"
-                    type="date"
-                    value={adjustmentForm.date}
-                    onChange={(event) =>
-                      setAdjustmentForm((current) => ({
-                        ...current,
-                        date: event.target.value
-                      }))
-                    }
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="field-label" htmlFor="adjustDescription">
-                  Комментарий
-                </label>
-                <input
-                  id="adjustDescription"
-                  className="field mt-1"
-                  value={adjustmentForm.description}
-                  onChange={(event) =>
-                    setAdjustmentForm((current) => ({
-                      ...current,
-                      description: event.target.value
-                    }))
-                  }
-                  placeholder="Например, сверка с банком"
-                />
-              </div>
-              <p className="text-xs text-muted">
-                Баланс рассчитывается из операций. Корректировка создаст отдельную операцию на
-                разницу.
-              </p>
+              ) : (
+                <>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="field-label" htmlFor="adjustBalance">
+                        Желаемый баланс
+                      </label>
+                      <input
+                        id="adjustBalance"
+                        ref={adjustmentBalanceInputRef}
+                        className="field mt-1"
+                        inputMode="decimal"
+                        value={adjustmentForm.balance}
+                        onChange={(event) =>
+                          setAdjustmentForm((current) => ({
+                            ...current,
+                            balance: event.target.value
+                          }))
+                        }
+                        placeholder="0"
+                      />
+                      {selectedAdjustmentAccount ? (
+                        <p className="mt-1 text-xs text-muted">
+                          Сейчас:{" "}
+                          {formatCurrency(
+                            selectedAdjustmentAccount.balance,
+                            selectedAdjustmentAccount.currency
+                          )}
+                        </p>
+                      ) : null}
+                    </div>
+                    <div>
+                      <label className="field-label" htmlFor="adjustDate">
+                        Дата
+                      </label>
+                      <input
+                        id="adjustDate"
+                        className="field mt-1"
+                        type="date"
+                        value={adjustmentForm.date}
+                        onChange={(event) =>
+                          setAdjustmentForm((current) => ({
+                            ...current,
+                            date: event.target.value
+                          }))
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="field-label" htmlFor="adjustDescription">
+                      Комментарий
+                    </label>
+                    <input
+                      id="adjustDescription"
+                      className="field mt-1"
+                      value={adjustmentForm.description}
+                      onChange={(event) =>
+                        setAdjustmentForm((current) => ({
+                          ...current,
+                          description: event.target.value
+                        }))
+                      }
+                      placeholder="Например, сверка с банком"
+                    />
+                  </div>
+                  <p className="text-xs text-muted">
+                    Баланс рассчитывается из операций. Корректировка создаст отдельную операцию на
+                    разницу.
+                  </p>
+                </>
+              )}
               <button type="submit" className="btn-secondary w-full" disabled={adjusting}>
-                {adjusting ? "Сохранение" : "Создать корректировку"}
+                {adjusting
+                  ? "Сохранение"
+                  : selectedAdjustmentAccount?.type === "CREDIT_CARD"
+                    ? "Сохранить данные карты"
+                    : "Создать корректировку"}
               </button>
             </form>
           </div>
@@ -1212,6 +1482,7 @@ export function AccountsClient() {
             <div className="grid gap-4">
               {accounts.map((account) => {
                 const availableLimit = getAvailableLimit(account);
+                const overLimit = getOverLimit(account);
 
                 return (
                 <article key={account.id} className="card p-4 sm:p-5">
@@ -1224,19 +1495,11 @@ export function AccountsClient() {
                       </div>
                       {account.type === "CREDIT_CARD" ? (
                         <div className="mt-4 rounded-md border border-line bg-soft/30 px-3 py-3">
-                          <div
-                            className={`text-xs font-medium uppercase tracking-normal ${
-                              availableLimit >= 0 ? "text-muted" : "text-loss"
-                            }`}
-                          >
-                            {availableLimit >= 0 ? "Доступно сейчас" : "Превышение лимита"}
+                          <div className="text-xs font-medium uppercase tracking-normal text-muted">
+                            Доступно сейчас
                           </div>
-                          <div
-                            className={`mt-1 text-2xl font-semibold ${
-                              availableLimit >= 0 ? "text-ink" : "text-loss"
-                            }`}
-                          >
-                            {formatCurrency(Math.abs(availableLimit), account.currency)}
+                          <div className="mt-1 text-2xl font-semibold text-ink">
+                            {formatCurrency(availableLimit, account.currency)}
                           </div>
                         </div>
                       ) : (
@@ -1254,11 +1517,19 @@ export function AccountsClient() {
                             Текущая задолженность:{" "}
                             {formatCurrency(account.currentDebt ?? 0, account.currency)}
                           </div>
+                          {overLimit > 0 ? (
+                            <div className="text-loss">
+                              Превышение лимита: {formatCurrency(overLimit, account.currency)}
+                            </div>
+                          ) : null}
                           {account.minimalPayment ? (
                             <div>
                               Минимальный платеж:{" "}
                               {formatCurrency(account.minimalPayment, account.currency)}
                             </div>
+                          ) : null}
+                          {account.interestRate !== null ? (
+                            <div>Процент: {account.interestRate}%</div>
                           ) : null}
                         </div>
                       ) : null}

@@ -42,8 +42,10 @@ export type Account = {
   currency: CurrencyCode;
   creditLimit: number | null;
   currentDebt: number;
+  availableCredit: number;
   minimalPayment: number | null;
   paymentDate: string | null;
+  interestRate: number | null;
   createdAt?: string;
   updatedAt?: string;
   _count?: {

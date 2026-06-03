@@ -48,6 +48,7 @@ type LoanForm = {
   plannedPayment: string;
   minimalPayment: string;
   creditLimit: string;
+  availableCredit: string;
   interestRate: string;
   gracePeriodDays: string;
   paymentDate: string;
@@ -75,6 +76,7 @@ const initialForm: LoanForm = {
   plannedPayment: "",
   minimalPayment: "",
   creditLimit: "",
+  availableCredit: "",
   interestRate: "",
   gracePeriodDays: "",
   paymentDate: "",
@@ -117,7 +119,11 @@ function getCreditCardDebt(loan: Loan) {
 }
 
 function getAvailableCredit(loan: Loan) {
-  return getCreditCardLimit(loan) - getCreditCardDebt(loan);
+  return loan.account?.availableCredit ?? 0;
+}
+
+function getOverLimit(loan: Loan) {
+  return Math.max(0, getCreditCardDebt(loan) - getCreditCardLimit(loan));
 }
 
 function getProgress(loan: Loan) {
@@ -145,6 +151,7 @@ function validateForm(form: LoanForm) {
   const errors: LoanErrors = {};
   const plannedPayment = parseOptionalAmount(form.plannedPayment);
   const minimalPayment = parseOptionalAmount(form.minimalPayment);
+  const availableCredit = parseOptionalAmount(form.availableCredit);
   const fallbackPayment = form.debtType === "CREDIT_CARD" ? minimalPayment : plannedPayment;
   const gracePeriodDays = form.gracePeriodDays.trim()
     ? Number(form.gracePeriodDays.trim().replace(/\s/g, ""))
@@ -160,6 +167,7 @@ function validateForm(form: LoanForm) {
     plannedPayment,
     minimalPayment,
     creditLimit: parseOptionalAmount(form.creditLimit),
+    availableCredit: form.debtType === "CREDIT_CARD" ? availableCredit ?? 0 : undefined,
     interestRate: parseOptionalAmount(form.interestRate),
     gracePeriodDays,
     paymentDate: form.paymentDate || null,
@@ -204,6 +212,15 @@ function validateForm(form: LoanForm) {
     (!Number.isFinite(payload.creditLimit) || payload.creditLimit <= 0)
   ) {
     errors.creditLimit = "Лимит должен быть больше нуля";
+  }
+
+  if (
+    form.debtType === "CREDIT_CARD" &&
+    (payload.availableCredit === undefined ||
+      !Number.isFinite(payload.availableCredit) ||
+      payload.availableCredit < 0)
+  ) {
+    errors.availableCredit = "Введите доступно сейчас";
   }
 
   if (
@@ -318,6 +335,10 @@ export function LoansClient() {
       plannedPayment: plannedPayment ? String(plannedPayment) : "",
       minimalPayment: loan.minimalPayment ? String(loan.minimalPayment) : "",
       creditLimit: loan.creditLimit ? String(loan.creditLimit) : "",
+      availableCredit:
+        loan.debtType === "CREDIT_CARD"
+          ? String(loan.account?.availableCredit ?? 0)
+          : "",
       interestRate: loan.interestRate !== null ? String(loan.interestRate) : "",
       gracePeriodDays: loan.gracePeriodDays !== null ? String(loan.gracePeriodDays) : "",
       paymentDate: loan.paymentDate ? toDateInputValue(loan.paymentDate) : "",
@@ -606,6 +627,8 @@ export function LoansClient() {
                       event.target.value === "CREDIT_CARD" ? "" : current.plannedPayment,
                     minimalPayment:
                       event.target.value === "CREDIT_CARD" ? current.minimalPayment : "",
+                    availableCredit:
+                      event.target.value === "CREDIT_CARD" ? current.availableCredit : "",
                     gracePeriodDays:
                       event.target.value === "CREDIT_CARD" ? current.gracePeriodDays : ""
                   }))
@@ -746,6 +769,31 @@ export function LoansClient() {
                     Информационное поле. Можно оставить пустым.
                   </p>
                   <FieldError message={errors.minimalPayment} />
+                </div>
+
+                <div>
+                  <label className="field-label" htmlFor="availableCredit">
+                    Доступно сейчас
+                  </label>
+                  <input
+                    id="availableCredit"
+                    className="field mt-1"
+                    min="0"
+                    step="0.01"
+                    type="number"
+                    value={form.availableCredit}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        availableCredit: event.target.value
+                      }))
+                    }
+                    placeholder="Например, 10041.64"
+                  />
+                  <p className="mt-1 text-xs text-muted">
+                    Отдельное значение из банка, не считается из лимита и долга.
+                  </p>
+                  <FieldError message={errors.availableCredit} />
                 </div>
 
                 <div>
@@ -944,6 +992,7 @@ export function LoansClient() {
                 const creditLimit = getCreditCardLimit(loan);
                 const currentDebt = getCreditCardDebt(loan);
                 const availableCredit = getAvailableCredit(loan);
+                const overLimit = getOverLimit(loan);
                 const paymentForm =
                   paymentForms[loan.id] ?? createInitialPaymentForm(accounts[0]?.id ?? "");
                 const statusTone =
@@ -991,21 +1040,11 @@ export function LoansClient() {
                         {isCreditCard ? (
                           <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                             <div className="rounded-md border border-line bg-soft/30 px-3 py-3 sm:col-span-2 xl:col-span-1">
-                              <div
-                                className={`text-xs font-medium uppercase tracking-normal ${
-                                  availableCredit >= 0 ? "text-muted" : "text-loss"
-                                }`}
-                              >
-                                {availableCredit >= 0
-                                  ? "Доступно сейчас"
-                                  : "Превышение лимита"}
+                              <div className="text-xs font-medium uppercase tracking-normal text-muted">
+                                Доступно сейчас
                               </div>
-                              <div
-                                className={`mt-1 font-semibold ${
-                                  availableCredit >= 0 ? "text-ink" : "text-loss"
-                                }`}
-                              >
-                                {formatCurrency(Math.abs(availableCredit))}
+                              <div className="mt-1 font-semibold text-ink">
+                                {formatCurrency(availableCredit)}
                               </div>
                             </div>
                             <div>
@@ -1019,6 +1058,11 @@ export function LoansClient() {
                               <div className="font-medium text-loss">
                                 {formatCurrency(currentDebt)}
                               </div>
+                              {overLimit > 0 ? (
+                                <div className="mt-1 text-xs text-loss">
+                                  Превышение лимита: {formatCurrency(overLimit)}
+                                </div>
+                              ) : null}
                             </div>
                             <div>
                               <div className="text-xs text-muted">Минимальный платеж</div>

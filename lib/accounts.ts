@@ -36,19 +36,12 @@ export function getTransactionImpact(type: string, amount: number) {
   return 0;
 }
 
-export function getCreditCardBalance(currentDebt: number) {
-  return -Math.max(0, currentDebt);
-}
-
-export function getAvailableCreditLimit(account: {
-  creditLimit: number | null;
-  currentDebt: number;
-}) {
-  return (account.creditLimit ?? 0) - account.currentDebt;
-}
-
 function nextDebt(currentDebt: number, delta: number) {
   return Math.max(0, currentDebt + delta);
+}
+
+function nextAvailableCredit(availableCredit: number, delta: number) {
+  return availableCredit + delta;
 }
 
 export async function ensureDefaultAccount(userId: string, client: DbClient = prisma) {
@@ -112,12 +105,14 @@ export async function applyTransactionEffect(
             ? -amount * direction
             : 0;
     const currentDebt = nextDebt(account.currentDebt, debtDelta);
+    const availableCredit = nextAvailableCredit(account.availableCredit, -debtDelta);
 
     return client.account.update({
       where: { id: account.id },
       data: {
         currentDebt,
-        balance: getCreditCardBalance(currentDebt)
+        availableCredit,
+        balance: 0
       }
     });
   }
@@ -150,11 +145,13 @@ export async function applyTransferEffect(
 
   if (fromAccount.type === creditCardAccountType) {
     const currentDebt = nextDebt(fromAccount.currentDebt, amount);
+    const availableCredit = nextAvailableCredit(fromAccount.availableCredit, -amount);
     await client.account.update({
       where: { id: fromAccount.id },
       data: {
         currentDebt,
-        balance: getCreditCardBalance(currentDebt)
+        availableCredit,
+        balance: 0
       }
     });
   } else {
@@ -166,11 +163,13 @@ export async function applyTransferEffect(
 
   if (toAccount.type === creditCardAccountType) {
     const currentDebt = nextDebt(toAccount.currentDebt, -amount);
+    const availableCredit = nextAvailableCredit(toAccount.availableCredit, amount);
     await client.account.update({
       where: { id: toAccount.id },
       data: {
         currentDebt,
-        balance: getCreditCardBalance(currentDebt)
+        availableCredit,
+        balance: 0
       }
     });
   } else {
@@ -201,11 +200,13 @@ export async function rollbackTransferEffect(
 
   if (fromAccount.type === creditCardAccountType) {
     const currentDebt = nextDebt(fromAccount.currentDebt, -amount);
+    const availableCredit = nextAvailableCredit(fromAccount.availableCredit, amount);
     await client.account.update({
       where: { id: fromAccount.id },
       data: {
         currentDebt,
-        balance: getCreditCardBalance(currentDebt)
+        availableCredit,
+        balance: 0
       }
     });
   } else {
@@ -217,11 +218,13 @@ export async function rollbackTransferEffect(
 
   if (toAccount.type === creditCardAccountType) {
     const currentDebt = nextDebt(toAccount.currentDebt, amount);
+    const availableCredit = nextAvailableCredit(toAccount.availableCredit, -amount);
     await client.account.update({
       where: { id: toAccount.id },
       data: {
         currentDebt,
-        balance: getCreditCardBalance(currentDebt)
+        availableCredit,
+        balance: 0
       }
     });
   } else {

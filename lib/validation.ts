@@ -137,12 +137,14 @@ export const accountSchema = z
       .max(60, "Название должно быть короче 60 символов")
       .transform((value) => value.replace(/\s+/g, " ")),
     type: accountTypeSchema.default("DEBIT"),
-    balance: moneySchema("Укажите баланс"),
+    balance: moneySchema("Укажите баланс").default(0),
     currency: currencySchema.default("RUB"),
     creditLimit: optionalPositiveMoneySchema("Лимит должен быть больше нуля"),
     currentDebt: optionalNonnegativeMoneySchema("Текущая задолженность не может быть отрицательной"),
+    availableCredit: optionalNonnegativeMoneySchema("Доступно сейчас не может быть отрицательным"),
     minimalPayment: optionalNonnegativeMoneySchema("Платеж не может быть отрицательным"),
-    paymentDate: optionalDateSchema
+    paymentDate: optionalDateSchema,
+    interestRate: optionalNonnegativeMoneySchema("Процент не может быть отрицательным")
   })
   .superRefine((value, context) => {
     if (value.type === "CREDIT_CARD" && !value.creditLimit) {
@@ -187,6 +189,15 @@ export const balanceAdjustmentSchema = z.object({
     .max(180, "Комментарий должен быть короче 180 символов")
     .optional()
     .transform((value) => value || null)
+});
+
+export const creditCardAdjustmentSchema = z.object({
+  creditLimit: optionalPositiveMoneySchema("Лимит должен быть больше нуля"),
+  currentDebt: optionalNonnegativeMoneySchema("Текущая задолженность не может быть отрицательной"),
+  availableCredit: nonnegativeMoneySchema("Доступно сейчас не может быть отрицательным"),
+  minimalPayment: optionalNonnegativeMoneySchema("Платеж не может быть отрицательным"),
+  paymentDate: optionalDateSchema,
+  interestRate: optionalNonnegativeMoneySchema("Процент не может быть отрицательным")
 });
 
 export const transactionSchema = z.object({
@@ -314,8 +325,12 @@ export const backupImportSchema = z.object({
         currency: currencySchema.default("RUB"),
         creditLimit: optionalPositiveMoneySchema("Лимит должен быть больше нуля").optional(),
         currentDebt: optionalNonnegativeMoneySchema("Текущая задолженность не может быть отрицательной").optional(),
+        availableCredit: optionalNonnegativeMoneySchema(
+          "Доступно сейчас не может быть отрицательным"
+        ).optional(),
         minimalPayment: optionalNonnegativeMoneySchema("Платеж не может быть отрицательным").optional(),
-        paymentDate: optionalDateSchema.optional()
+        paymentDate: optionalDateSchema.optional(),
+        interestRate: optionalNonnegativeMoneySchema("Процент не может быть отрицательным").optional()
       })
     )
     .optional(),
