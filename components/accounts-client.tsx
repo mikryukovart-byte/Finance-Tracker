@@ -7,7 +7,14 @@ import { EmptyState } from "@/components/empty-state";
 import { FieldError, Notice } from "@/components/notice";
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
-import { fetchAccounts, readErrorMessage } from "@/lib/client-api";
+import {
+  accountCacheKey,
+  fetchAccounts,
+  fetchJsonCached,
+  invalidateFinancialDataCache,
+  readClientCache,
+  readErrorMessage
+} from "@/lib/client-api";
 import { formatCurrency, formatDate, toDateInputValue } from "@/lib/format";
 import type { Account, AccountType, CurrencyCode, Transfer } from "@/types/finance";
 
@@ -55,6 +62,7 @@ type DeleteFlow = {
 };
 
 type FormErrors = Partial<Record<keyof AccountForm | keyof TransferForm | "adjustment", string>>;
+const transfersCacheKey = "transfers:recent";
 
 const initialAccountForm: AccountForm = {
   name: "",
@@ -156,8 +164,15 @@ function getTransferCount(account: Account) {
 }
 
 export function AccountsClient() {
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [transfers, setTransfers] = useState<Transfer[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>(
+    () =>
+      readClientCache<{ accounts: Account[]; totalBalance: number }>(
+        accountCacheKey(true)
+      )?.accounts ?? []
+  );
+  const [transfers, setTransfers] = useState<Transfer[]>(
+    () => readClientCache<Transfer[]>(transfersCacheKey) ?? []
+  );
   const [form, setForm] = useState<AccountForm>(initialAccountForm);
   const [transferForm, setTransferForm] = useState<TransferForm>(() => createTransferForm([]));
   const [adjustmentForm, setAdjustmentForm] = useState<AdjustmentForm>(() =>
@@ -166,7 +181,7 @@ export function AccountsClient() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeAdjustmentAccountId, setActiveAdjustmentAccountId] = useState<string>("");
   const [errors, setErrors] = useState<FormErrors>({});
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => accounts.length === 0 && transfers.length === 0);
   const [saving, setSaving] = useState(false);
   const [adjusting, setAdjusting] = useState(false);
   const [deleteFlow, setDeleteFlow] = useState<DeleteFlow | null>(null);
@@ -184,25 +199,24 @@ export function AccountsClient() {
     [accounts, adjustmentForm.accountId]
   );
 
-  async function loadData(showLoader = true) {
-    if (showLoader) {
+  async function loadData(showLoader = true, force = false) {
+    if (showLoader && accounts.length === 0 && transfers.length === 0) {
       setLoading(true);
     }
     setMessage("");
 
     try {
-      const [accountData, transferResponse] = await Promise.all([
-        fetchAccounts({ withCounts: true }),
-        fetch("/api/transfers", { cache: "no-store" })
+      const [accountData, nextTransfers] = await Promise.all([
+        fetchAccounts({ withCounts: true, force }),
+        fetchJsonCached<Transfer[]>(transfersCacheKey, "/api/transfers", {
+          force,
+          ttlMs: 12_000
+        })
       ]);
-
-      if (!transferResponse.ok) {
-        throw new Error(await readErrorMessage(transferResponse));
-      }
 
       const nextAccounts = accountData.accounts;
       setAccounts(nextAccounts);
-      setTransfers(await transferResponse.json());
+      setTransfers(nextTransfers);
       setTransferForm((current) => ({
         ...createTransferForm(nextAccounts),
         ...current,
@@ -328,7 +342,8 @@ export function AccountsClient() {
         throw new Error(await readErrorMessage(response));
       }
 
-      await loadData(false);
+      invalidateFinancialDataCache();
+      await loadData(false, true);
       resetForm();
       setMessage(editingId ? "Счет обновлен" : "Счет создан");
       setMessageTone("success");
@@ -384,7 +399,8 @@ export function AccountsClient() {
         throw new Error(errorMessage);
       }
 
-      await loadData(false);
+      invalidateFinancialDataCache();
+      await loadData(false, true);
       setMessage("Счет удален");
       setMessageTone("success");
     } catch (error) {
@@ -417,7 +433,8 @@ export function AccountsClient() {
         throw new Error(await readErrorMessage(response));
       }
 
-      await loadData(false);
+      invalidateFinancialDataCache();
+      await loadData(false, true);
       setDeleteFlow(null);
       setMessage("Данные перенесены, счет удален");
       setMessageTone("success");
@@ -466,7 +483,8 @@ export function AccountsClient() {
         throw new Error(await readErrorMessage(response));
       }
 
-      await loadData(false);
+      invalidateFinancialDataCache();
+      await loadData(false, true);
       setDeleteFlow(null);
       setMessage("Счет и связанные операции удалены");
       setMessageTone("success");
@@ -508,7 +526,8 @@ export function AccountsClient() {
         throw new Error(await readErrorMessage(response));
       }
 
-      await loadData(false);
+      invalidateFinancialDataCache();
+      await loadData(false, true);
       setTransferForm(createTransferForm(accounts));
       setMessage("Перевод выполнен");
       setMessageTone("success");
@@ -532,7 +551,8 @@ export function AccountsClient() {
         throw new Error(await readErrorMessage(response));
       }
 
-      await loadData(false);
+      invalidateFinancialDataCache();
+      await loadData(false, true);
       setMessage("Перевод удален");
       setMessageTone("success");
       window.dispatchEvent(new Event("finance-data-changed"));
@@ -615,7 +635,8 @@ export function AccountsClient() {
         throw new Error(errorMessage);
       }
 
-      await loadData(false);
+      invalidateFinancialDataCache();
+      await loadData(false, true);
       setAdjustmentForm(createAdjustmentForm([]));
       setActiveAdjustmentAccountId("");
       setMessage(isCreditCard ? "Кредитная карта обновлена" : "Баланс скорректирован");
@@ -1471,10 +1492,23 @@ export function AccountsClient() {
         </section>
 
         <section className="min-w-0 space-y-4">
-          {loading ? (
+          {loading && accounts.length > 0 ? (
+            <p className="text-sm text-muted">Обновляем данные…</p>
+          ) : null}
+
+          {loading && accounts.length === 0 ? (
             <>
               <p className="text-sm text-muted">Загрузка...</p>
-              <div className="card h-80 animate-pulse bg-soft/50" />
+              <div className="grid gap-4">
+                <StatCard label="Общий баланс" value="" icon={ArrowRightLeft} loading />
+                <div className="card p-4 sm:p-5">
+                  <div className="space-y-3">
+                    <div className="h-3 w-2/3 animate-pulse rounded-md bg-soft/50" />
+                    <div className="h-3 w-1/2 animate-pulse rounded-md bg-soft/40" />
+                    <div className="h-3 w-3/4 animate-pulse rounded-md bg-soft/40" />
+                  </div>
+                </div>
+              </div>
             </>
           ) : accounts.length === 0 ? (
             <EmptyState text="Счетов пока нет" />

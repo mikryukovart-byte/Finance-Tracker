@@ -1,6 +1,7 @@
 import type { Account, Category } from "@/types/finance";
 
 const categoriesCacheTtlMs = 15_000;
+const defaultJsonCacheTtlMs = 20_000;
 let categoriesCache:
   | {
       data: Category[];
@@ -8,6 +9,8 @@ let categoriesCache:
     }
   | null = null;
 let categoriesRequest: Promise<Category[]> | null = null;
+const jsonCache = new Map<string, { data: unknown; expiresAt: number }>();
+const jsonRequests = new Map<string, Promise<unknown>>();
 
 export async function readErrorMessage(response: Response) {
   const body = await response.json().catch(() => null);
@@ -57,18 +60,113 @@ export function invalidateCategoriesCache() {
   categoriesRequest = null;
 }
 
-export async function fetchAccounts(options: { withCounts?: boolean } = {}) {
-  const response = await fetch(
-    options.withCounts ? "/api/accounts?withCounts=1" : "/api/accounts",
-    { cache: "no-store" }
-  );
+export function readClientCache<T>(key: string) {
+  const cached = jsonCache.get(key);
 
-  if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+  if (!cached) {
+    return null;
   }
 
-  const data: { accounts: Account[]; totalBalance: number } = await response.json();
-  return data;
+  if (cached.expiresAt <= Date.now()) {
+    jsonCache.delete(key);
+    return null;
+  }
+
+  return cached.data as T;
+}
+
+export function setClientCache<T>(key: string, data: T, ttlMs = defaultJsonCacheTtlMs) {
+  jsonCache.set(key, {
+    data,
+    expiresAt: Date.now() + ttlMs
+  });
+}
+
+export function invalidateClientCache(prefix?: string) {
+  if (!prefix) {
+    jsonCache.clear();
+    jsonRequests.clear();
+    return;
+  }
+
+  for (const key of Array.from(jsonCache.keys())) {
+    if (key.startsWith(prefix)) {
+      jsonCache.delete(key);
+    }
+  }
+
+  for (const key of Array.from(jsonRequests.keys())) {
+    if (key.startsWith(prefix)) {
+      jsonRequests.delete(key);
+    }
+  }
+}
+
+export function invalidateFinancialDataCache() {
+  [
+    "accounts:",
+    "advisor:",
+    "dashboard:",
+    "loans:",
+    "reports:",
+    "transactions:",
+    "transfers:",
+    "truth:"
+  ].forEach((prefix) => invalidateClientCache(prefix));
+}
+
+export async function fetchJsonCached<T>(
+  key: string,
+  url: string,
+  options: { force?: boolean; ttlMs?: number } = {}
+) {
+  if (!options.force) {
+    const cached = readClientCache<T>(key);
+
+    if (cached) {
+      return cached;
+    }
+
+    const pending = jsonRequests.get(key);
+
+    if (pending) {
+      return pending as Promise<T>;
+    }
+  }
+
+  const request = fetch(url, { cache: "no-store" })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const data: T = await response.json();
+      setClientCache(key, data, options.ttlMs ?? defaultJsonCacheTtlMs);
+      return data;
+    })
+    .finally(() => {
+      jsonRequests.delete(key);
+    });
+
+  jsonRequests.set(key, request);
+  return request;
+}
+
+export function accountCacheKey(withCounts = false) {
+  return withCounts ? "accounts:with-counts" : "accounts:basic";
+}
+
+export async function fetchAccounts(
+  options: { withCounts?: boolean; force?: boolean } = {}
+) {
+  return fetchJsonCached<{ accounts: Account[]; totalBalance: number }>(
+    accountCacheKey(Boolean(options.withCounts)),
+    options.withCounts ? "/api/accounts?withCounts=1" : "/api/accounts",
+    {
+      force: options.force,
+      ttlMs: 12_000
+    }
+  );
 }
 
 export function buildQuery(params: Record<string, string>) {

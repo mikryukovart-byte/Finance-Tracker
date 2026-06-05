@@ -5,7 +5,11 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { Notice } from "@/components/notice";
 import { PageHeader } from "@/components/page-header";
-import { downloadJson, readErrorMessage } from "@/lib/client-api";
+import {
+  downloadJson,
+  invalidateFinancialDataCache,
+  readErrorMessage
+} from "@/lib/client-api";
 import {
   defaultSettings,
   parseSettings,
@@ -126,6 +130,7 @@ export function SettingsClient() {
       setMessage(
         `Импортировано: категорий ${result.imported.categories}, операций ${result.imported.transactions}, кредитов ${result.imported.loans}`
       );
+      invalidateFinancialDataCache();
       setMessageTone("success");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Не удалось импортировать данные");
@@ -183,6 +188,7 @@ export function SettingsClient() {
       setMessage("");
       setResetMessage(result.message ?? "Все данные сброшены");
       setResetMessageTone("success");
+      invalidateFinancialDataCache();
       window.dispatchEvent(new Event("finance-data-reset"));
     } catch (error) {
       setResetMessage(error instanceof Error ? error.message : "Не удалось сбросить данные");

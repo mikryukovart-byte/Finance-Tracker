@@ -62,12 +62,12 @@ export function CategoriesClient() {
   const editingUsageCount = editingCategory?._count?.transactions ?? 0;
 
   async function loadCategories(showLoader = true) {
-    if (showLoader) {
+    if (showLoader && categories.length === 0) {
       setLoading(true);
     }
 
     try {
-      setCategories(await fetchCategories({ force: showLoader }));
+      setCategories(await fetchCategories());
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Неизвестная ошибка");
       setMessageTone("error");
@@ -367,12 +367,24 @@ export function CategoriesClient() {
           </form>
         </section>
 
-        {loading ? (
+        {loading && categories.length > 0 ? (
+          <p className="text-sm text-muted">Обновляем данные…</p>
+        ) : null}
+
+        {loading && categories.length === 0 ? (
           <div>
             <p className="mb-3 text-sm text-muted">Загрузка...</p>
             <div className="grid gap-4 lg:grid-cols-2">
-              <div className="card h-64 animate-pulse bg-soft/50" />
-              <div className="card h-64 animate-pulse bg-soft/50" />
+              {["Расходы", "Доходы"].map((title) => (
+                <div key={title} className="card p-4 sm:p-5">
+                  <h2 className="text-lg font-semibold text-ink">{title}</h2>
+                  <div className="mt-4 space-y-3">
+                    <div className="h-3 w-2/3 animate-pulse rounded-md bg-soft/50" />
+                    <div className="h-3 w-1/2 animate-pulse rounded-md bg-soft/40" />
+                    <div className="h-3 w-3/4 animate-pulse rounded-md bg-soft/40" />
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         ) : (

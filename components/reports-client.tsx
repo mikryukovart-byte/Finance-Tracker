@@ -23,7 +23,7 @@ import { Notice } from "@/components/notice";
 import { PageHeader } from "@/components/page-header";
 import { PeriodFilter } from "@/components/period-filter";
 import { StatCard } from "@/components/stat-card";
-import { buildQuery, readErrorMessage } from "@/lib/client-api";
+import { buildQuery, fetchJsonCached, readClientCache } from "@/lib/client-api";
 import { formatCurrency, formatPercent } from "@/lib/format";
 import { buildPeriodQuery, createPeriodState, describePeriod } from "@/lib/period";
 import { parseSettings, storageKey } from "@/lib/settings";
@@ -43,6 +43,27 @@ const tooltipStyle = {
 const tooltipLabelStyle = {
   color: "#e5e5e5"
 };
+const initialReportsPeriod = createPeriodState("month");
+
+function reportsQuery(period: typeof initialReportsPeriod, threshold = 1000) {
+  return buildQuery({
+    leakageThreshold: String(threshold),
+    ...buildPeriodQuery(period)
+  });
+}
+
+function reportsCacheKey(period: typeof initialReportsPeriod, threshold = 1000) {
+  return `reports:${reportsQuery(period, threshold)}`;
+}
+
+function readLeakageThreshold() {
+  if (typeof window === "undefined") {
+    return 1000;
+  }
+
+  const settings = parseSettings(window.localStorage.getItem(storageKey));
+  return Number(settings.leakageThreshold) || 1000;
+}
 
 function shortCurrency(value: number) {
   if (Math.abs(value) >= 1_000_000) {
@@ -131,30 +152,34 @@ function CategoryBreakdownCard({
 }
 
 export function ReportsClient() {
-  const [reports, setReports] = useState<ReportsResponse | null>(null);
-  const [period, setPeriod] = useState(() => createPeriodState("month"));
-  const [loading, setLoading] = useState(true);
+  const [reports, setReports] = useState<ReportsResponse | null>(() =>
+    readClientCache<ReportsResponse>(reportsCacheKey(initialReportsPeriod))
+  );
+  const [period, setPeriod] = useState(() => initialReportsPeriod);
+  const [loading, setLoading] = useState(() => !reports);
   const [error, setError] = useState("");
 
   useEffect(() => {
     async function loadReports() {
-      setLoading(true);
       setError("");
+      const threshold = readLeakageThreshold();
+      const key = reportsCacheKey(period, threshold);
+      const cached = readClientCache<ReportsResponse>(key);
+
+      if (cached) {
+        setReports(cached);
+      }
+
+      setLoading(!cached);
 
       try {
-        const settings = parseSettings(window.localStorage.getItem(storageKey));
-        const threshold = Number(settings.leakageThreshold) || 1000;
-        const query = buildQuery({
-          leakageThreshold: String(threshold),
-          ...buildPeriodQuery(period)
-        });
-        const response = await fetch(`/api/reports${query}`, { cache: "no-store" });
-
-        if (!response.ok) {
-          throw new Error(await readErrorMessage(response));
-        }
-
-        setReports(await response.json());
+        setReports(
+          await fetchJsonCached<ReportsResponse>(
+            key,
+            `/api/reports${reportsQuery(period, threshold)}`,
+            { ttlMs: 12_000 }
+          )
+        );
       } catch (err) {
         setError(err instanceof Error ? err.message : "Неизвестная ошибка");
       } finally {
@@ -184,15 +209,23 @@ export function ReportsClient() {
 
       <Notice message={error} tone="error" />
 
-      {loading ? (
+      {loading && reports ? <p className="mb-3 text-sm text-muted">Обновляем данные…</p> : null}
+
+      {loading && !reports ? (
         <div className="grid gap-4">
           <p className="text-sm text-muted">Загрузка...</p>
           <div className="grid gap-4 sm:grid-cols-3">
-            <div className="card h-28 animate-pulse bg-soft/50" />
-            <div className="card h-28 animate-pulse bg-soft/50" />
-            <div className="card h-28 animate-pulse bg-soft/50" />
+            <StatCard label="Доходы за период" value="" icon={ArrowUpCircle} loading />
+            <StatCard label="Расходы за период" value="" icon={ArrowDownCircle} loading />
+            <StatCard label="Разница за период" value="" icon={Scale} loading />
           </div>
-          <div className="card h-96 animate-pulse bg-soft/50" />
+          <div className="card p-4 sm:p-5">
+            <div className="space-y-3">
+              <div className="h-3 w-3/4 animate-pulse rounded-md bg-soft/50" />
+              <div className="h-3 w-2/3 animate-pulse rounded-md bg-soft/40" />
+              <div className="h-3 w-5/6 animate-pulse rounded-md bg-soft/40" />
+            </div>
+          </div>
         </div>
       ) : reports ? (
         <div className="space-y-6">

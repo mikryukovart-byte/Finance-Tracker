@@ -8,6 +8,7 @@ import {
   fetchAccounts,
   fetchCategories,
   invalidateCategoriesCache,
+  invalidateFinancialDataCache,
   readErrorMessage,
   setCachedCategories
 } from "@/lib/client-api";
@@ -246,6 +247,7 @@ export function QuickTransactionInput({
       setManual(null);
       setMessage("Операция добавлена");
       invalidateCategoriesCache();
+      invalidateFinancialDataCache();
       await onAdded?.();
       window.requestAnimationFrame(() => inputRef.current?.focus());
     } catch (error) {

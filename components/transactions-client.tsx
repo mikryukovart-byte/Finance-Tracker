@@ -25,7 +25,10 @@ import {
   buildQuery,
   fetchAccounts,
   fetchCategories,
+  fetchJsonCached,
   invalidateCategoriesCache,
+  invalidateFinancialDataCache,
+  readClientCache,
   readErrorMessage
 } from "@/lib/client-api";
 import { formatCurrency, formatDate, toDateInputValue, typeLabels } from "@/lib/format";
@@ -67,6 +70,7 @@ const defaultFilters: TransactionFilters = {
   sortBy: "date",
   sortDir: "desc"
 };
+const initialTransactionsPeriod = createPeriodState("month");
 
 function createInitialForm(categoryId = "", accountId = ""): TransactionForm {
   return {
@@ -183,7 +187,7 @@ export function TransactionsClient() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [form, setForm] = useState<TransactionForm>(() => createInitialForm());
   const [filters, setFilters] = useState<TransactionFilters>(defaultFilters);
-  const [period, setPeriod] = useState(() => createPeriodState("month"));
+  const [period, setPeriod] = useState(() => initialTransactionsPeriod);
   const [errors, setErrors] = useState<FormErrors>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [movingTransaction, setMovingTransaction] = useState<Transaction | null>(null);
@@ -228,24 +232,29 @@ export function TransactionsClient() {
     };
   }, [transactions]);
 
-  const loadTransactions = useCallback(async () => {
-    setLoading(true);
+  const loadTransactions = useCallback(async (force = false) => {
+    const query = buildQuery({
+      type: filters.type === "ALL" ? "" : filters.type,
+      categoryId: filters.categoryId,
+      ...buildPeriodQuery(period),
+      sortBy: filters.sortBy,
+      sortDir: filters.sortDir
+    });
+    const cacheKey = `transactions:${query}`;
+    const cached = readClientCache<Transaction[]>(cacheKey);
 
+    if (cached && !force) {
+      setTransactions(cached);
+    }
+
+    setLoading(!cached);
     try {
-      const query = buildQuery({
-        type: filters.type === "ALL" ? "" : filters.type,
-        categoryId: filters.categoryId,
-        ...buildPeriodQuery(period),
-        sortBy: filters.sortBy,
-        sortDir: filters.sortDir
-      });
-      const response = await fetch(`/api/transactions${query}`, { cache: "no-store" });
-
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
-      }
-
-      setTransactions(await response.json());
+      setTransactions(
+        await fetchJsonCached<Transaction[]>(cacheKey, `/api/transactions${query}`, {
+          force,
+          ttlMs: 8_000
+        })
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Неизвестная ошибка");
       setMessageTone("error");
@@ -401,9 +410,10 @@ export function TransactionsClient() {
         throw new Error(await readErrorMessage(response));
       }
 
-      const accountData = await fetchAccounts();
+      invalidateFinancialDataCache();
+      const accountData = await fetchAccounts({ force: true });
       setAccounts(accountData.accounts);
-      await loadTransactions();
+      await loadTransactions(true);
       setAdjustmentEdit(null);
       setMessage("Корректировка обновлена");
       setMessageTone("success");
@@ -444,9 +454,10 @@ export function TransactionsClient() {
         throw new Error(await readErrorMessage(response));
       }
 
-      const accountData = await fetchAccounts();
+      invalidateFinancialDataCache();
+      const accountData = await fetchAccounts({ force: true });
       setAccounts(accountData.accounts);
-      await loadTransactions();
+      await loadTransactions(true);
       setMovingTransaction(null);
       setMoveAccountId("");
       setMessage("Операция перенесена на другой счет");
@@ -497,9 +508,10 @@ export function TransactionsClient() {
       }
 
       invalidateCategoriesCache();
-      const accountData = await fetchAccounts();
+      invalidateFinancialDataCache();
+      const accountData = await fetchAccounts({ force: true });
       setAccounts(accountData.accounts);
-      await loadTransactions();
+      await loadTransactions(true);
 
       if (editingId) {
         resetForm();
@@ -540,9 +552,10 @@ export function TransactionsClient() {
       }
 
       invalidateCategoriesCache();
-      const accountData = await fetchAccounts();
+      invalidateFinancialDataCache();
+      const accountData = await fetchAccounts({ force: true });
       setAccounts(accountData.accounts);
-      await loadTransactions();
+      await loadTransactions(true);
       if (editingId === id) {
         resetForm();
       }
@@ -620,9 +633,9 @@ export function TransactionsClient() {
           accounts={accounts}
           categories={categories}
           onAdded={async () => {
-            const accountData = await fetchAccounts();
+            const accountData = await fetchAccounts({ force: true });
             setAccounts(accountData.accounts);
-            await loadTransactions();
+            await loadTransactions(true);
           }}
         />
       </div>
@@ -1148,10 +1161,21 @@ export function TransactionsClient() {
             </div>
           </div>
 
-          {loading ? (
+          {loading && transactions.length > 0 ? (
+            <p className="text-sm text-muted">Обновляем данные…</p>
+          ) : null}
+
+          {loading && transactions.length === 0 ? (
             <>
               <p className="text-sm text-muted">Загрузка...</p>
-              <div className="card h-80 animate-pulse bg-soft/50" />
+              <div className="card p-4 sm:p-5">
+                <div className="space-y-3">
+                  <div className="h-3 w-3/4 animate-pulse rounded-md bg-soft/50" />
+                  <div className="h-3 w-2/3 animate-pulse rounded-md bg-soft/40" />
+                  <div className="h-3 w-5/6 animate-pulse rounded-md bg-soft/40" />
+                  <div className="h-3 w-1/2 animate-pulse rounded-md bg-soft/30" />
+                </div>
+              </div>
             </>
           ) : transactions.length === 0 ? (
             <EmptyState text="Операций по выбранным условиям нет" />

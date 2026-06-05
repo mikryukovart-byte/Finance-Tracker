@@ -27,7 +27,10 @@ import { StatCard } from "@/components/stat-card";
 import {
   buildQuery,
   fetchCategories,
+  fetchJsonCached,
   invalidateCategoriesCache,
+  invalidateFinancialDataCache,
+  readClientCache,
   readErrorMessage
 } from "@/lib/client-api";
 import { formatCurrency, formatDate, toDateInputValue, typeLabels } from "@/lib/format";
@@ -53,6 +56,12 @@ const initialQuickAdd: QuickAddForm = {
   categoryId: "",
   type: "EXPENSE"
 };
+
+const initialDashboardPeriod = createPeriodState("month");
+
+function dashboardCacheKey(periodState: typeof initialDashboardPeriod) {
+  return `dashboard:${buildQuery(buildPeriodQuery(periodState))}`;
+}
 
 function parseAmount(value: string) {
   return Number(value.trim().replace(/\s/g, "").replace(",", "."));
@@ -91,35 +100,37 @@ function transactionAmountPrefix(transaction: Transaction) {
 }
 
 export function DashboardClient() {
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [stats, setStats] = useState<DashboardStats | null>(() =>
+    readClientCache<DashboardStats>(dashboardCacheKey(initialDashboardPeriod))
+  );
+  const [accounts, setAccounts] = useState<Account[]>(
+    () =>
+      readClientCache<DashboardStats>(dashboardCacheKey(initialDashboardPeriod))?.accounts ?? []
+  );
   const [categories, setCategories] = useState<Category[]>([]);
-  const [period, setPeriod] = useState(() => createPeriodState("month"));
+  const [period, setPeriod] = useState(() => initialDashboardPeriod);
   const [quickAdd, setQuickAdd] = useState<QuickAddForm>(initialQuickAdd);
   const [quickStatus, setQuickStatus] = useState<QuickAddStatus | null>(null);
   const [successPulse, setSuccessPulse] = useState(false);
   const [monthlyLimit, setMonthlyLimit] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !stats);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
   const amountInputRef = useRef<HTMLInputElement | null>(null);
   const quickAddRef = useRef<HTMLElement | null>(null);
   const quickAddFormRef = useRef<HTMLFormElement | null>(null);
 
-  const loadStats = useCallback(async (showLoader = true) => {
+  const loadStats = useCallback(async (showLoader = true, force = false) => {
     try {
       if (showLoader) {
         setLoading(true);
       }
-      const response = await fetch(`/api/dashboard${buildQuery(buildPeriodQuery(period))}`, {
-        cache: "no-store"
-      });
-
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
-      }
-
-      const data: DashboardStats = await response.json();
+      const query = buildQuery(buildPeriodQuery(period));
+      const data = await fetchJsonCached<DashboardStats>(
+        dashboardCacheKey(period),
+        `/api/dashboard${query}`,
+        { force, ttlMs: 12_000 }
+      );
       setStats(data);
       setAccounts(data.accounts ?? []);
     } catch (err) {
@@ -161,7 +172,7 @@ export function DashboardClient() {
 
   useEffect(() => {
     async function refreshFinancialData() {
-      await Promise.all([loadStats(false), loadCategories()]);
+      await Promise.all([loadStats(false, true), loadCategories()]);
     }
 
     window.addEventListener("finance-data-changed", refreshFinancialData);
@@ -264,7 +275,8 @@ export function DashboardClient() {
       setSuccessPulse(true);
       window.setTimeout(() => setSuccessPulse(false), 900);
       invalidateCategoriesCache();
-      await loadStats(false);
+      invalidateFinancialDataCache();
+      await loadStats(false, true);
       await loadCategories();
       window.requestAnimationFrame(() => amountInputRef.current?.focus());
     } catch (err) {
@@ -316,7 +328,7 @@ export function DashboardClient() {
           categories={categories}
           onAdded={async () => {
             invalidateCategoriesCache();
-            await loadStats(false);
+            await loadStats(false, true);
             await loadCategories();
           }}
         />
@@ -483,13 +495,20 @@ export function DashboardClient() {
         </div>
       ) : null}
 
-      {loading ? (
+      {loading && stats ? (
+        <p className="mb-3 text-sm text-muted">Обновляем данные…</p>
+      ) : null}
+
+      {loading && !stats ? (
         <>
           <p className="mb-3 text-sm text-muted">Загрузка...</p>
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {Array.from({ length: 6 }).map((_, index) => (
-              <div key={index} className="card h-28 animate-pulse bg-soft/50" />
-            ))}
+            <StatCard label="Деньги на счетах" value="" icon={Landmark} loading />
+            <StatCard label="Общий долг" value="" icon={WalletCards} loading />
+            <StatCard label="Чистая позиция" value="" icon={PiggyBank} loading />
+            <StatCard label="Баланс за период" value="" icon={PiggyBank} loading />
+            <StatCard label="Расходы за период" value="" icon={WalletCards} loading />
+            <StatCard label="Доходы за период" value="" icon={ArrowUpCircle} loading />
           </div>
         </>
       ) : stats ? (

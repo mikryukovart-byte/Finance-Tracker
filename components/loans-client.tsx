@@ -17,7 +17,13 @@ import { EmptyState } from "@/components/empty-state";
 import { FieldError, Notice } from "@/components/notice";
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
-import { fetchAccounts, readErrorMessage } from "@/lib/client-api";
+import {
+  fetchAccounts,
+  fetchJsonCached,
+  invalidateFinancialDataCache,
+  readClientCache,
+  readErrorMessage
+} from "@/lib/client-api";
 import {
   debtPriorityLabels,
   debtTypeLabels,
@@ -64,6 +70,7 @@ type PaymentForm = {
 };
 
 type LoanErrors = Partial<Record<keyof LoanForm, string>>;
+const loansCacheKey = "loans:list";
 
 const initialForm: LoanForm = {
   debtType: "BANK_LOAN",
@@ -247,17 +254,20 @@ function validateForm(form: LoanForm) {
 }
 
 export function LoansClient() {
-  const [loans, setLoans] = useState<Loan[]>([]);
+  const [loans, setLoans] = useState<Loan[]>(
+    () => readClientCache<LoansResponse>(loansCacheKey)?.loans ?? []
+  );
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [summary, setSummary] = useState<LoansResponse["summary"]>({
-    totalDebt: 0,
-    paymentsThisMonth: 0
+    totalDebt: readClientCache<LoansResponse>(loansCacheKey)?.summary.totalDebt ?? 0,
+    paymentsThisMonth:
+      readClientCache<LoansResponse>(loansCacheKey)?.summary.paymentsThisMonth ?? 0
   });
   const [form, setForm] = useState<LoanForm>(initialForm);
   const [errors, setErrors] = useState<LoanErrors>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [paymentForms, setPaymentForms] = useState<Record<string, PaymentForm>>({});
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => loans.length === 0);
   const [saving, setSaving] = useState(false);
   const [payingId, setPayingId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
@@ -282,23 +292,20 @@ export function LoansClient() {
     return activeLoans[0] ?? null;
   }, [loans]);
 
-  async function loadLoans(showLoader = true) {
-    if (showLoader) {
+  async function loadLoans(showLoader = true, force = false) {
+    if (showLoader && loans.length === 0) {
       setLoading(true);
     }
     setMessage("");
 
     try {
-      const [response, accountData] = await Promise.all([
-        fetch("/api/loans", { cache: "no-store" }),
-        fetchAccounts()
+      const [data, accountData] = await Promise.all([
+        fetchJsonCached<LoansResponse>(loansCacheKey, "/api/loans", {
+          force,
+          ttlMs: 12_000
+        }),
+        fetchAccounts({ force })
       ]);
-
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
-      }
-
-      const data: LoansResponse = await response.json();
       setLoans(data.loans);
       setAccounts(accountData.accounts);
       setSummary(data.summary);
@@ -378,7 +385,8 @@ export function LoansClient() {
         throw new Error(await readErrorMessage(response));
       }
 
-      await loadLoans(false);
+      invalidateFinancialDataCache();
+      await loadLoans(false, true);
       resetForm();
       setMessage(editingId ? "Кредит обновлен" : "Кредит добавлен");
       setMessageTone("success");
@@ -406,7 +414,8 @@ export function LoansClient() {
         throw new Error(await readErrorMessage(response));
       }
 
-      await loadLoans(false);
+      invalidateFinancialDataCache();
+      await loadLoans(false, true);
       if (editingId === loan.id) {
         resetForm();
       }
@@ -467,7 +476,8 @@ export function LoansClient() {
         ...current,
         [loan.id]: createInitialPaymentForm(accounts[0]?.id ?? "")
       }));
-      await loadLoans(false);
+      invalidateFinancialDataCache();
+      await loadLoans(false, true);
       setMessage("Платеж добавлен и учтен как расход");
       setMessageTone("success");
     } catch (error) {
@@ -496,7 +506,8 @@ export function LoansClient() {
         throw new Error(await readErrorMessage(response));
       }
 
-      await loadLoans(false);
+      invalidateFinancialDataCache();
+      await loadLoans(false, true);
       setMessage("Платеж удален");
       setMessageTone("success");
     } catch (error) {
@@ -976,10 +987,24 @@ export function LoansClient() {
         </section>
 
         <section className="min-w-0">
-          {loading ? (
+          {loading && loans.length > 0 ? (
+            <p className="mb-3 text-sm text-muted">Обновляем данные…</p>
+          ) : null}
+
+          {loading && loans.length === 0 ? (
             <>
               <p className="mb-3 text-sm text-muted">Загрузка...</p>
-              <div className="card h-80 animate-pulse bg-soft/50" />
+              <div className="grid gap-4">
+                <StatCard label="Общий долг" value="" icon={WalletCards} loading />
+                <StatCard label="Платежи в этом месяце" value="" icon={CalendarClock} loading />
+                <div className="card p-4 sm:p-5">
+                  <div className="space-y-3">
+                    <div className="h-3 w-3/4 animate-pulse rounded-md bg-soft/50" />
+                    <div className="h-3 w-2/3 animate-pulse rounded-md bg-soft/40" />
+                    <div className="h-3 w-1/2 animate-pulse rounded-md bg-soft/30" />
+                  </div>
+                </div>
+              </div>
             </>
           ) : loans.length === 0 ? (
             <EmptyState text="Кредитов пока нет" />

@@ -18,7 +18,12 @@ import { EmptyState } from "@/components/empty-state";
 import { Notice } from "@/components/notice";
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
-import { readErrorMessage } from "@/lib/client-api";
+import {
+  fetchJsonCached,
+  readClientCache,
+  readErrorMessage,
+  setClientCache
+} from "@/lib/client-api";
 import { formatCurrency, formatDate } from "@/lib/format";
 import type {
   AdvisorAnalysis,
@@ -39,6 +44,7 @@ const analysisBlocks: Array<{
   { key: "spendingLimit", title: "Лимит трат", icon: WalletCards },
   { key: "hardTruth", title: "Жесткая правда", icon: AlertTriangle }
 ];
+const advisorSummaryCacheKey = "advisor:summary";
 
 function formatDateTime(value: string | null) {
   if (!value) {
@@ -193,9 +199,11 @@ function SummaryDetails({ summary }: { summary: AdvisorSummary }) {
 }
 
 export function AdvisorClient() {
-  const [summary, setSummary] = useState<AdvisorSummary | null>(null);
+  const [summary, setSummary] = useState<AdvisorSummary | null>(
+    () => readClientCache<AdvisorResponse>(advisorSummaryCacheKey)?.summary ?? null
+  );
   const [analysis, setAnalysis] = useState<AdvisorAnalysis | null>(null);
-  const [loadingSummary, setLoadingSummary] = useState(true);
+  const [loadingSummary, setLoadingSummary] = useState(() => !summary);
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<"neutral" | "success" | "error">("neutral");
@@ -224,17 +232,21 @@ export function AdvisorClient() {
   );
 
   async function loadSummary() {
-    setLoadingSummary(true);
     setMessage("");
+    const cached = readClientCache<AdvisorResponse>(advisorSummaryCacheKey);
+
+    if (cached) {
+      setSummary(cached.summary);
+    }
+
+    setLoadingSummary(!cached);
 
     try {
-      const response = await fetch("/api/advisor", { cache: "no-store" });
-
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
-      }
-
-      const data: AdvisorResponse = await response.json();
+      const data = await fetchJsonCached<AdvisorResponse>(
+        advisorSummaryCacheKey,
+        "/api/advisor",
+        { ttlMs: 15_000 }
+      );
       setSummary(data.summary);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Не удалось загрузить сводку");
@@ -259,6 +271,10 @@ export function AdvisorClient() {
       }
 
       const data: AdvisorResponse = await response.json();
+      setClientCache(advisorSummaryCacheKey, {
+        summary: data.summary,
+        analysis: null
+      } satisfies AdvisorResponse);
       setSummary(data.summary);
       setAnalysis(data.analysis);
       setLastUpdated(new Date().toISOString());
@@ -306,13 +322,18 @@ export function AdvisorClient() {
 
       <Notice message={message} tone={messageTone} />
 
-      {loadingSummary ? (
+      {loadingSummary && summary ? (
+        <p className="mt-6 text-sm text-muted">Обновляем сводку…</p>
+      ) : null}
+
+      {loadingSummary && !summary ? (
         <>
           <p className="mt-6 text-sm text-muted">Загрузка...</p>
           <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, index) => (
-              <div key={index} className="card h-28 animate-pulse bg-soft/50" />
-            ))}
+            <StatCard label="Деньги сейчас" value="" icon={Landmark} loading />
+            <StatCard label="Общий долг" value="" icon={CreditCard} loading />
+            <StatCard label="Чистая позиция" value="" icon={Scale} loading />
+            <StatCard label="Расходы за месяц" value="" icon={WalletCards} loading />
           </div>
         </>
       ) : summary ? (

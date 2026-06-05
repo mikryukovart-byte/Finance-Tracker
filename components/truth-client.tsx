@@ -15,37 +15,63 @@ import { Notice } from "@/components/notice";
 import { PageHeader } from "@/components/page-header";
 import { PeriodFilter } from "@/components/period-filter";
 import { StatCard } from "@/components/stat-card";
-import { buildQuery, readErrorMessage } from "@/lib/client-api";
+import { buildQuery, fetchJsonCached, readClientCache } from "@/lib/client-api";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
 import { buildPeriodQuery, createPeriodState, describePeriod } from "@/lib/period";
 import { parseSettings, storageKey } from "@/lib/settings";
 import type { TruthResponse } from "@/types/finance";
 
+const initialTruthPeriod = createPeriodState("month");
+
+function truthQuery(period: typeof initialTruthPeriod, threshold = 1000) {
+  return buildQuery({
+    leakageThreshold: String(threshold),
+    ...buildPeriodQuery(period)
+  });
+}
+
+function truthCacheKey(period: typeof initialTruthPeriod, threshold = 1000) {
+  return `truth:${truthQuery(period, threshold)}`;
+}
+
+function readLeakageThreshold() {
+  if (typeof window === "undefined") {
+    return 1000;
+  }
+
+  const settings = parseSettings(window.localStorage.getItem(storageKey));
+  return Number(settings.leakageThreshold) || 1000;
+}
+
 export function TruthClient() {
-  const [data, setData] = useState<TruthResponse | null>(null);
-  const [period, setPeriod] = useState(() => createPeriodState("month"));
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<TruthResponse | null>(() =>
+    readClientCache<TruthResponse>(truthCacheKey(initialTruthPeriod))
+  );
+  const [period, setPeriod] = useState(() => initialTruthPeriod);
+  const [loading, setLoading] = useState(() => !data);
   const [error, setError] = useState("");
 
   useEffect(() => {
     async function loadTruth() {
-      setLoading(true);
       setError("");
+      const threshold = readLeakageThreshold();
+      const key = truthCacheKey(period, threshold);
+      const cached = readClientCache<TruthResponse>(key);
+
+      if (cached) {
+        setData(cached);
+      }
+
+      setLoading(!cached);
 
       try {
-        const settings = parseSettings(window.localStorage.getItem(storageKey));
-        const threshold = Number(settings.leakageThreshold) || 1000;
-        const query = buildQuery({
-          leakageThreshold: String(threshold),
-          ...buildPeriodQuery(period)
-        });
-        const response = await fetch(`/api/truth${query}`, { cache: "no-store" });
-
-        if (!response.ok) {
-          throw new Error(await readErrorMessage(response));
-        }
-
-        setData(await response.json());
+        setData(
+          await fetchJsonCached<TruthResponse>(
+            key,
+            `/api/truth${truthQuery(period, threshold)}`,
+            { ttlMs: 12_000 }
+          )
+        );
       } catch (err) {
         setError(err instanceof Error ? err.message : "Не удалось загрузить данные");
       } finally {
@@ -67,13 +93,18 @@ export function TruthClient() {
 
       <Notice message={error} tone="error" />
 
-      {loading ? (
+      {loading && data ? <p className="mb-3 text-sm text-muted">Обновляем данные…</p> : null}
+
+      {loading && !data ? (
         <>
           <p className="mb-3 text-sm text-muted">Загрузка...</p>
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {Array.from({ length: 6 }).map((_, index) => (
-              <div key={index} className="card h-28 animate-pulse bg-soft/50" />
-            ))}
+            <StatCard label="Деньги на счетах" value="" icon={WalletCards} loading />
+            <StatCard label="Доход за период" value="" icon={CircleDollarSign} loading />
+            <StatCard label="Расходы за период" value="" icon={CalendarDays} loading />
+            <StatCard label="Общий долг" value="" icon={Landmark} loading />
+            <StatCard label="Чистая позиция" value="" icon={Scale} loading />
+            <StatCard label="До выхода в ноль" value="" icon={Scale} loading />
           </div>
         </>
       ) : data ? (
