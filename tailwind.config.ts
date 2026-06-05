@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import defaultTheme from "tailwindcss/defaultTheme";
 
 const config: Config = {
   content: [
@@ -9,17 +10,20 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#e5e5e5",
-        muted: "#9ca3af",
+        ink: "#f0efed",
+        muted: "#bcbab7",
         line: "#2a2a2a",
         paper: "#202020",
         canvas: "#191919",
-        sidebar: "#171717",
-        soft: "#2a2a2a",
+        sidebar: "#202020",
+        soft: "#2c2c2c",
         accent: "#d4d4d4",
         profit: "#8bc99a",
         loss: "#e68a8a",
         warning: "#d6b66d"
+      },
+      fontFamily: {
+        sans: ["var(--font-inter)", ...defaultTheme.fontFamily.sans]
       },
       boxShadow: {
         soft: "0 1px 0 rgba(255, 255, 255, 0.03)"

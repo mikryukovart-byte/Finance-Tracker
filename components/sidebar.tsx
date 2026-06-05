@@ -37,11 +37,11 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="border-b border-line bg-sidebar px-4 py-4 lg:sticky lg:top-0 lg:h-screen lg:border-b-0 lg:border-r lg:px-4 lg:py-5">
+    <aside className="border-b border-line bg-sidebar px-4 py-4 text-[#bcbab7] lg:sticky lg:top-0 lg:h-screen lg:border-b-0 lg:border-r lg:px-4 lg:py-5">
       <div className="flex items-center justify-between gap-4 lg:block">
         <Link href="/" className="block">
-          <div className="text-base font-semibold text-ink">Финансы</div>
-          <div className="mt-0.5 text-xs text-muted">Личный учет</div>
+          <div className="text-base font-semibold text-[#f0efed]">Финансы</div>
+          <div className="mt-0.5 text-xs text-[#bcbab7]">Личный учет</div>
         </Link>
       </div>
 
@@ -57,10 +57,10 @@ export function Sidebar() {
               href={item.href}
               prefetch
               aria-current={active ? "page" : undefined}
-              className={`flex min-h-10 shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm transition lg:w-full ${
+              className={`flex min-h-10 shrink-0 items-center gap-2 rounded-md border px-3 py-2 text-sm transition lg:w-full ${
                 active
-                  ? "bg-soft text-ink"
-                  : "text-muted hover:bg-soft hover:text-ink"
+                  ? "border-[#2c2c2c] bg-[#2c2c2c] text-[#f0efed]"
+                  : "border-transparent text-[#bcbab7] hover:bg-[#2c2c2c] hover:text-[#f0efed]"
               }`}
             >
               <Icon className="h-4 w-4" aria-hidden="true" />
@@ -72,7 +72,7 @@ export function Sidebar() {
 
       <button
         type="button"
-        className="mt-4 flex min-h-10 w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-muted transition hover:bg-soft hover:text-ink"
+        className="mt-4 flex min-h-10 w-full items-center gap-2 rounded-md border border-transparent px-3 py-2 text-sm text-[#bcbab7] transition hover:bg-[#2c2c2c] hover:text-[#f0efed]"
         onClick={logout}
       >
         <LogOut className="h-4 w-4" aria-hidden="true" />
