@@ -17,7 +17,13 @@ export async function GET() {
 
   const categories = await prisma.category.findMany({
     where: { userId: auth.userId },
-    include: {
+    select: {
+      id: true,
+      userId: true,
+      name: true,
+      type: true,
+      createdAt: true,
+      updatedAt: true,
       _count: {
         select: { transactions: true }
       }
@@ -77,7 +83,13 @@ export async function POST(request: Request) {
         ...parsed.data,
         userId: auth.userId
       },
-      include: {
+      select: {
+        id: true,
+        userId: true,
+        name: true,
+        type: true,
+        createdAt: true,
+        updatedAt: true,
         _count: {
           select: { transactions: true }
         }

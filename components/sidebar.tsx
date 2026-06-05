@@ -13,7 +13,7 @@ import {
   Settings
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 const navigation = [
   { href: "/", label: "Главная", icon: Home },
@@ -29,10 +29,11 @@ const navigation = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
-    window.location.href = "/login";
+    router.replace("/login");
   }
 
   return (
@@ -54,6 +55,8 @@ export function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
+              prefetch
+              aria-current={active ? "page" : undefined}
               className={`flex min-h-10 shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm transition lg:w-full ${
                 active
                   ? "bg-soft text-ink"

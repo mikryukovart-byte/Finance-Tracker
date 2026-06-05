@@ -19,6 +19,58 @@ type SupabaseSession = {
   };
 };
 
+const authCacheTtlMs = 30_000;
+const authUserCache = new Map<
+  string,
+  {
+    user: AuthUser;
+    expiresAt: number;
+  }
+>();
+
+function getJwtExpiresAt(token: string) {
+  try {
+    const [, payload] = token.split(".");
+
+    if (!payload) {
+      return null;
+    }
+
+    const normalizedPayload = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const decoded = JSON.parse(Buffer.from(normalizedPayload, "base64").toString("utf8"));
+    const expiresAt = Number(decoded?.exp) * 1000;
+
+    return Number.isFinite(expiresAt) ? expiresAt : null;
+  } catch {
+    return null;
+  }
+}
+
+function readCachedAuthUser(token: string) {
+  const cached = authUserCache.get(token);
+
+  if (!cached) {
+    return null;
+  }
+
+  if (cached.expiresAt <= Date.now()) {
+    authUserCache.delete(token);
+    return null;
+  }
+
+  return cached.user;
+}
+
+function cacheAuthUser(token: string, user: AuthUser) {
+  const tokenExpiresAt = getJwtExpiresAt(token);
+  const maxExpiresAt = tokenExpiresAt ?? Date.now() + authCacheTtlMs;
+  const expiresAt = Math.min(Date.now() + authCacheTtlMs, maxExpiresAt);
+
+  if (expiresAt > Date.now()) {
+    authUserCache.set(token, { user, expiresAt });
+  }
+}
+
 function getSupabaseConfig() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -64,6 +116,12 @@ export async function requireAuth(): Promise<AuthUser | NextResponse> {
     return authJsonError();
   }
 
+  const cachedUser = readCachedAuthUser(token);
+
+  if (cachedUser) {
+    return cachedUser;
+  }
+
   try {
     const response = await supabaseAuthFetch("/user", {
       headers: {
@@ -81,10 +139,14 @@ export async function requireAuth(): Promise<AuthUser | NextResponse> {
       return authJsonError();
     }
 
-    return {
+    const authUser = {
       userId: user.id,
       email: user.email ?? null
     };
+
+    cacheAuthUser(token, authUser);
+
+    return authUser;
   } catch {
     return authJsonError();
   }

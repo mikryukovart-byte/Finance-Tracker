@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { Notice } from "@/components/notice";
 import { readErrorMessage } from "@/lib/client-api";
@@ -8,6 +9,7 @@ import { readErrorMessage } from "@/lib/client-api";
 type AuthMode = "login" | "register";
 
 export function AuthClient() {
+  const router = useRouter();
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -61,7 +63,7 @@ export function AuthClient() {
         return;
       }
 
-      window.location.href = nextPath;
+      router.replace(nextPath);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Не удалось выполнить вход");
       setTone("error");
