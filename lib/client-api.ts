@@ -57,8 +57,11 @@ export function invalidateCategoriesCache() {
   categoriesRequest = null;
 }
 
-export async function fetchAccounts() {
-  const response = await fetch("/api/accounts", { cache: "no-store" });
+export async function fetchAccounts(options: { withCounts?: boolean } = {}) {
+  const response = await fetch(
+    options.withCounts ? "/api/accounts?withCounts=1" : "/api/accounts",
+    { cache: "no-store" }
+  );
 
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));

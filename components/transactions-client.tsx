@@ -615,7 +615,16 @@ export function TransactionsClient() {
       />
 
       <div className="mb-6">
-        <QuickTransactionInput title="Строка быстрого ввода" onAdded={loadTransactions} />
+        <QuickTransactionInput
+          title="Строка быстрого ввода"
+          accounts={accounts}
+          categories={categories}
+          onAdded={async () => {
+            const accountData = await fetchAccounts();
+            setAccounts(accountData.accounts);
+            await loadTransactions();
+          }}
+        />
       </div>
 
       <PeriodFilter value={period} onChange={setPeriod} />

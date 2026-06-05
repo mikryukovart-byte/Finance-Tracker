@@ -16,6 +16,8 @@ import type { Account, Category, CategoryKind } from "@/types/finance";
 
 type QuickTransactionInputProps = {
   title?: string;
+  accounts?: Account[];
+  categories?: Category[];
   onAdded?: () => Promise<void> | void;
 };
 
@@ -106,34 +108,67 @@ function findCategory(categories: Category[], type: CategoryKind, name: string) 
 
 export function QuickTransactionInput({
   title = "Быстрый ввод",
+  accounts: providedAccounts,
+  categories: providedCategories,
   onAdded
 }: QuickTransactionInputProps) {
   const [text, setText] = useState("");
-  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [localAccounts, setLocalAccounts] = useState<Account[]>([]);
   const [accountId, setAccountId] = useState("");
   const [categories, setCategories] = useState<Category[]>([]);
   const [manual, setManual] = useState<ManualState | null>(null);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const accounts = providedAccounts ?? localAccounts;
 
   useEffect(() => {
-    async function loadData() {
+    if (providedCategories) {
+      setCategories(providedCategories);
+      return;
+    }
+
+    async function loadCategories() {
       try {
-        const [categoryData, accountData] = await Promise.all([
-          fetchCategories(),
-          fetchAccounts()
-        ]);
+        const categoryData = await fetchCategories();
         setCategories(categoryData);
-        setAccounts(accountData.accounts);
-        setAccountId((current) => current || accountData.accounts[0]?.id || "");
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "Не удалось загрузить категории");
       }
     }
 
-    loadData();
-  }, []);
+    loadCategories();
+  }, [providedCategories]);
+
+  useEffect(() => {
+    if (providedAccounts) {
+      return;
+    }
+
+    async function loadAccounts() {
+      try {
+        const accountData = await fetchAccounts();
+        setLocalAccounts(accountData.accounts);
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "Не удалось загрузить счета");
+      }
+    }
+
+    loadAccounts();
+  }, [providedAccounts]);
+
+  useEffect(() => {
+    if (accounts.length === 0) {
+      setAccountId("");
+      return;
+    }
+
+    setAccountId((current) =>
+      current && accounts.some((account) => account.id === current)
+        ? current
+        : accounts[0].id
+    );
+  }, [accounts]);
 
   const manualCategories = useMemo(
     () => categories.filter((category) => category.type === manual?.type),

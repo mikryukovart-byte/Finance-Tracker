@@ -17,14 +17,35 @@ export const dynamic = "force-dynamic";
 
 const dayMs = 24 * 60 * 60 * 1000;
 
-type ReportTransaction = Awaited<
-  ReturnType<typeof prisma.transaction.findMany>
->[number] & {
+type ReportTransaction = {
+  id: string;
+  amount: number;
+  type: string;
+  date: Date;
+  description: string | null;
+  categoryId: string | null;
+  createdAt: Date;
   category: {
     id: string;
     name: string;
+    type: string;
   } | null;
 };
+
+function sumByType(transactions: ReportTransaction[]) {
+  return transactions.reduce(
+    (totals, transaction) => {
+      if (transaction.type === "INCOME") {
+        totals.income += transaction.amount;
+      } else if (transaction.type === "EXPENSE") {
+        totals.expense += transaction.amount;
+      }
+
+      return totals;
+    },
+    { income: 0, expense: 0 }
+  );
+}
 
 function buildCategoryBreakdown(transactions: ReportTransaction[], type: "INCOME" | "EXPENSE") {
   const categoryMap = new Map<string, { categoryId: string; name: string; amount: number }>();
@@ -82,16 +103,53 @@ export async function GET(request: Request) {
         lt: periodEnd
       }
     },
-    include: { category: true },
+    select: {
+      id: true,
+      amount: true,
+      type: true,
+      date: true,
+      description: true,
+      categoryId: true,
+      createdAt: true,
+      category: {
+        select: {
+          id: true,
+          name: true,
+          type: true
+        }
+      }
+    },
     orderBy: [{ date: "desc" }, { createdAt: "desc" }]
   });
   const [loans, accounts] = await Promise.all([
     prisma.loan.findMany({
       where: { userId: auth.userId, status: { not: "CLOSED" } },
-      include: { account: true }
+      select: {
+        debtType: true,
+        accountId: true,
+        initialAmount: true,
+        remainingAmount: true,
+        monthlyPayment: true,
+        plannedPayment: true,
+        minimalPayment: true,
+        status: true,
+        account: {
+          select: {
+            currentDebt: true,
+            minimalPayment: true
+          }
+        }
+      }
     }),
     prisma.account.findMany({
-      where: { userId: auth.userId }
+      where: { userId: auth.userId },
+      select: {
+        id: true,
+        type: true,
+        balance: true,
+        currentDebt: true,
+        minimalPayment: true
+      }
     })
   ]);
   const periodTransactions = allTransactions.filter(
@@ -155,29 +213,19 @@ export async function GET(request: Request) {
     }
   }
 
-  const totalIncome = periodTransactions
-    .filter((transaction) => transaction.type === "INCOME")
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const totalExpense = periodTransactions
-    .filter((transaction) => transaction.type === "EXPENSE")
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  const currentTotals = sumByType(periodTransactions);
+  const previousTotals = sumByType(previousPeriodTransactions);
+  const totalIncome = currentTotals.income;
+  const totalExpense = currentTotals.expense;
   const currentMonth = {
-    income: periodTransactions
-      .filter((transaction) => transaction.type === "INCOME")
-      .reduce((sum, transaction) => sum + transaction.amount, 0),
-    expense: periodTransactions
-      .filter((transaction) => transaction.type === "EXPENSE")
-      .reduce((sum, transaction) => sum + transaction.amount, 0),
+    income: currentTotals.income,
+    expense: currentTotals.expense,
     balance: 0
   };
   currentMonth.balance = currentMonth.income - currentMonth.expense;
   const previousMonth = {
-    income: previousPeriodTransactions
-      .filter((transaction) => transaction.type === "INCOME")
-      .reduce((sum, transaction) => sum + transaction.amount, 0),
-    expense: previousPeriodTransactions
-      .filter((transaction) => transaction.type === "EXPENSE")
-      .reduce((sum, transaction) => sum + transaction.amount, 0),
+    income: previousTotals.income,
+    expense: previousTotals.expense,
     balance: 0
   };
   previousMonth.balance = previousMonth.income - previousMonth.expense;

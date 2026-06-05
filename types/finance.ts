@@ -220,6 +220,92 @@ export type ReportsResponse = {
   debtProgress: LoansResponse["summary"];
 };
 
+export type AdvisorAnalysis = {
+  shortConclusion: string[];
+  mainRisk: string[];
+  todayActions: string[];
+  dontDo: string[];
+  debtPriority: string[];
+  spendingLimit: string[];
+  hardTruth: string[];
+  source: "ai" | "rules";
+};
+
+export type AdvisorSummary = {
+  generatedAt: string;
+  period: {
+    label: string;
+    startDate: string;
+    endDate: string;
+  };
+  totals: {
+    realMoney: number;
+    totalDebt: number;
+    netPosition: number;
+    monthlyIncome: number;
+    monthlyExpense: number;
+    safeDailyLimit: number;
+    daysLeftInMonth: number;
+  };
+  accounts: Array<{
+    name: string;
+    type: AccountType;
+    balance: number;
+    currency: CurrencyCode;
+  }>;
+  creditCards: Array<{
+    name: string;
+    creditLimit: number;
+    currentDebt: number;
+    availableCredit: number;
+    overLimit: number;
+    minimalPayment: number | null;
+    paymentDate: string | null;
+  }>;
+  loans: Array<{
+    title: string;
+    debtType: DebtType;
+    remainingDebt: number;
+    plannedPayment: number;
+    progressPercent: number | null;
+    paymentDate: string | null;
+  }>;
+  transactions: {
+    topExpenseCategories: Array<{
+      name: string;
+      amount: number;
+      count: number;
+    }>;
+    trend: {
+      last7DaysExpense: number;
+      previous7DaysExpense: number;
+      change: number;
+    };
+    leakage: {
+      threshold: number;
+      totalSmallExpenses: number;
+      percentOfMonthlyIncome: number;
+      topCategories: Array<{
+        name: string;
+        amount: number;
+        count: number;
+      }>;
+      repeatedExpenses: Array<{
+        description: string;
+        categoryName: string;
+        count: number;
+        total: number;
+      }>;
+    };
+  };
+};
+
+export type AdvisorResponse = {
+  summary: AdvisorSummary;
+  analysis: AdvisorAnalysis | null;
+  warning?: string;
+};
+
 export type CategoryBreakdownItem = {
     categoryId: string;
     name: string;

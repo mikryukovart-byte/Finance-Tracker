@@ -10,6 +10,47 @@ import { firstZodError, transactionSchema } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 
+const transactionResponseSelect = {
+  id: true,
+  userId: true,
+  amount: true,
+  type: true,
+  date: true,
+  description: true,
+  categoryId: true,
+  accountId: true,
+  createdAt: true,
+  updatedAt: true,
+  category: {
+    select: {
+      id: true,
+      userId: true,
+      name: true,
+      type: true,
+      createdAt: true,
+      updatedAt: true
+    }
+  },
+  account: {
+    select: {
+      id: true,
+      userId: true,
+      name: true,
+      type: true,
+      balance: true,
+      currency: true,
+      creditLimit: true,
+      currentDebt: true,
+      availableCredit: true,
+      minimalPayment: true,
+      paymentDate: true,
+      interestRate: true,
+      createdAt: true,
+      updatedAt: true
+    }
+  }
+} satisfies Prisma.TransactionSelect;
+
 export async function GET(request: Request) {
   const auth = await requireAuth();
 
@@ -43,7 +84,7 @@ export async function GET(request: Request) {
 
   const transactions = await prisma.transaction.findMany({
     where,
-    include: { category: true, account: true },
+    select: transactionResponseSelect,
     orderBy:
       sortBy === "amount"
         ? [{ amount: sortDir }, { date: "desc" }, { createdAt: "desc" }]
@@ -99,7 +140,7 @@ export async function POST(request: Request) {
         ...parsed.data,
         userId: auth.userId
       },
-      include: { category: true, account: true }
+      select: transactionResponseSelect
     });
     await applyTransactionEffect(
       tx,

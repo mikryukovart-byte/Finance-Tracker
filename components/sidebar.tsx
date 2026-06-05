@@ -2,6 +2,7 @@
 
 import {
   BarChart3,
+  Brain,
   CreditCard,
   FolderTree,
   Home,
@@ -22,6 +23,7 @@ const navigation = [
   { href: "/categories", label: "Категории", icon: FolderTree },
   { href: "/loans", label: "Кредиты", icon: CreditCard },
   { href: "/reports", label: "Отчеты", icon: BarChart3 },
+  { href: "/advisor", label: "Советник", icon: Brain },
   { href: "/settings", label: "Настройки", icon: Settings }
 ];
 

@@ -16,19 +16,16 @@ type TransactionWithCategory = {
   description: string | null;
   categoryId: string | null;
   createdAt: Date;
-  updatedAt: Date;
   category: {
     id: string;
-    userId: string;
     name: string;
     type: string;
-    createdAt: Date;
-    updatedAt: Date;
   } | null;
 };
 
 type LoanForControl = {
   debtType?: string;
+  accountId?: string | null;
   initialAmount: number | null;
   remainingAmount: number;
   monthlyPayment: number | null;
@@ -44,9 +41,17 @@ type LoanForControl = {
 type AccountForControl = {
   id: string;
   type: string;
+  name?: string;
   balance: number;
+  currency?: string;
+  creditLimit?: number | null;
   currentDebt: number;
+  availableCredit?: number;
   minimalPayment?: number | null;
+  paymentDate?: Date | null;
+  interestRate?: number | null;
+  createdAt?: Date;
+  updatedAt?: Date;
 };
 
 type FinancialRange = {
@@ -261,19 +266,51 @@ export async function getFinancialControlData(
         userId,
         ...dateFilter
       },
-      include: {
-        category: true
+      select: {
+        id: true,
+        amount: true,
+        type: true,
+        date: true,
+        description: true,
+        categoryId: true,
+        createdAt: true,
+        category: {
+          select: {
+            id: true,
+            name: true,
+            type: true
+          }
+        }
       },
       orderBy: [{ date: "desc" }, { createdAt: "desc" }]
     }),
     prisma.loan.findMany({
       where: { userId, status: { not: "CLOSED" } },
-      include: { account: true }
+      select: {
+        debtType: true,
+        accountId: true,
+        initialAmount: true,
+        remainingAmount: true,
+        monthlyPayment: true,
+        plannedPayment: true,
+        minimalPayment: true,
+        status: true,
+        account: {
+          select: {
+            currentDebt: true,
+            minimalPayment: true
+          }
+        }
+      }
     }),
     prisma.account.findMany({
-      where: { userId }
+      where: { userId },
+      orderBy: [{ createdAt: "asc" }, { name: "asc" }]
     })
   ]);
 
-  return buildFinancialControlData(transactions, loans, threshold, new Date(), accounts);
+  return {
+    ...buildFinancialControlData(transactions, loans, threshold, new Date(), accounts),
+    accounts
+  };
 }

@@ -10,6 +10,62 @@ import { firstZodError, loanSchema } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 
+const loanResponseSelect = {
+  id: true,
+  userId: true,
+  debtType: true,
+  title: true,
+  lender: true,
+  initialAmount: true,
+  remainingAmount: true,
+  monthlyPayment: true,
+  plannedPayment: true,
+  minimalPayment: true,
+  creditLimit: true,
+  interestRate: true,
+  gracePeriodDays: true,
+  paymentDate: true,
+  accountId: true,
+  priority: true,
+  status: true,
+  createdAt: true,
+  updatedAt: true,
+  account: {
+    select: {
+      id: true,
+      userId: true,
+      name: true,
+      type: true,
+      balance: true,
+      currency: true,
+      creditLimit: true,
+      currentDebt: true,
+      availableCredit: true,
+      minimalPayment: true,
+      paymentDate: true,
+      interestRate: true,
+      createdAt: true,
+      updatedAt: true
+    }
+  },
+  payments: {
+    select: {
+      id: true,
+      userId: true,
+      loanId: true,
+      amount: true,
+      appliedAmount: true,
+      date: true,
+      description: true,
+      transactionId: true,
+      createdAt: true,
+      updatedAt: true
+    },
+    orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+    take: 8
+  }
+} satisfies Prisma.LoanSelect;
+
 function normalizeLoanBody(body: Record<string, unknown>) {
   const debtType = body.debtType ?? "BANK_LOAN";
   const totalAmount = body.initialAmount ?? body.totalAmount ?? body.creditLimit;
@@ -88,13 +144,7 @@ export async function GET() {
 
   const loans = await prisma.loan.findMany({
     where: { userId: auth.userId },
-    include: {
-      account: true,
-      payments: {
-        orderBy: [{ date: "desc" }, { createdAt: "desc" }],
-        take: 8
-      }
-    },
+    select: loanResponseSelect,
     orderBy: [
       { status: "asc" },
       { priority: "asc" },
@@ -160,13 +210,7 @@ export async function POST(request: Request) {
           ...parsed.data,
           userId: auth.userId
         },
-        include: {
-          account: true,
-          payments: {
-            orderBy: [{ date: "desc" }, { createdAt: "desc" }],
-            take: 8
-          }
-        }
+        select: loanResponseSelect
       });
 
       if (saved.debtType === "CREDIT_CARD") {
@@ -191,13 +235,7 @@ export async function POST(request: Request) {
 
           return tx.loan.findUniqueOrThrow({
             where: { id: saved.id },
-            include: {
-              account: true,
-              payments: {
-                orderBy: [{ date: "desc" }, { createdAt: "desc" }],
-                take: 8
-              }
-            }
+            select: loanResponseSelect
           });
         }
 
@@ -213,13 +251,7 @@ export async function POST(request: Request) {
         return tx.loan.update({
           where: { id: saved.id },
           data: { accountId: account.id },
-          include: {
-            account: true,
-            payments: {
-              orderBy: [{ date: "desc" }, { createdAt: "desc" }],
-              take: 8
-            }
-          }
+          select: loanResponseSelect
         });
       }
 

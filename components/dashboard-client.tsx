@@ -26,7 +26,6 @@ import { QuickTransactionInput } from "@/components/quick-transaction-input";
 import { StatCard } from "@/components/stat-card";
 import {
   buildQuery,
-  fetchAccounts,
   fetchCategories,
   invalidateCategoriesCache,
   readErrorMessage
@@ -120,7 +119,9 @@ export function DashboardClient() {
         throw new Error(await readErrorMessage(response));
       }
 
-      setStats(await response.json());
+      const data: DashboardStats = await response.json();
+      setStats(data);
+      setAccounts(data.accounts ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось загрузить главную");
     } finally {
@@ -132,12 +133,8 @@ export function DashboardClient() {
 
   const loadCategories = useCallback(async () => {
     try {
-      const [categoryData, accountData] = await Promise.all([
-        fetchCategories(),
-        fetchAccounts()
-      ]);
+      const categoryData = await fetchCategories();
       setCategories(categoryData);
-      setAccounts(accountData.accounts);
     } catch (err) {
       setQuickStatus({
         message: err instanceof Error ? err.message : "Не удалось загрузить категории",
@@ -315,6 +312,8 @@ export function DashboardClient() {
       <div className="mb-6">
         <QuickTransactionInput
           title="Строка быстрого ввода"
+          accounts={accounts}
+          categories={categories}
           onAdded={async () => {
             invalidateCategoriesCache();
             await loadStats(false);

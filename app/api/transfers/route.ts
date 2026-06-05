@@ -8,6 +8,34 @@ import { firstZodError, transferSchema } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 
+const transferResponseSelect = {
+  id: true,
+  userId: true,
+  fromAccountId: true,
+  toAccountId: true,
+  amount: true,
+  date: true,
+  description: true,
+  createdAt: true,
+  updatedAt: true,
+  fromAccount: {
+    select: {
+      id: true,
+      name: true,
+      currency: true,
+      type: true
+    }
+  },
+  toAccount: {
+    select: {
+      id: true,
+      name: true,
+      currency: true,
+      type: true
+    }
+  }
+};
+
 export async function GET() {
   const auth = await requireAuth();
 
@@ -17,10 +45,7 @@ export async function GET() {
 
   const transfers = await prisma.transfer.findMany({
     where: { userId: auth.userId },
-    include: {
-      fromAccount: true,
-      toAccount: true
-    },
+    select: transferResponseSelect,
     orderBy: [{ date: "desc" }, { createdAt: "desc" }],
     take: 30
   });
@@ -66,10 +91,7 @@ export async function POST(request: Request) {
         ...parsed.data,
         userId: auth.userId
       },
-      include: {
-        fromAccount: true,
-        toAccount: true
-      }
+      select: transferResponseSelect
     });
     await applyTransferEffect(
       tx,

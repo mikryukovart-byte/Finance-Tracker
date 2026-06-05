@@ -192,7 +192,7 @@ export function AccountsClient() {
 
     try {
       const [accountData, transferResponse] = await Promise.all([
-        fetchAccounts(),
+        fetchAccounts({ withCounts: true }),
         fetch("/api/transfers", { cache: "no-store" })
       ]);
 

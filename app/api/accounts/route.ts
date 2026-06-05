@@ -14,9 +14,18 @@ import { accountSchema, firstZodError } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 
-function getAccounts(userId: string) {
-  return prisma.account.findMany({
+function getAccounts(userId: string, withCounts: boolean) {
+  const accountArgs = {
     where: { userId },
+    orderBy: [{ createdAt: "asc" as const }, { name: "asc" as const }]
+  };
+
+  if (!withCounts) {
+    return prisma.account.findMany(accountArgs);
+  }
+
+  return prisma.account.findMany({
+    ...accountArgs,
     include: {
       _count: {
         select: {
@@ -26,20 +35,20 @@ function getAccounts(userId: string) {
           incomingTransfers: true
         }
       }
-    },
-    orderBy: [{ createdAt: "asc" }, { name: "asc" }]
+    }
   });
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const auth = await requireAuth();
 
   if (isAuthError(auth)) {
     return auth;
   }
 
+  const url = new URL(request.url);
   await ensureDefaultAccount(auth.userId);
-  const accounts = await getAccounts(auth.userId);
+  const accounts = await getAccounts(auth.userId, url.searchParams.get("withCounts") === "1");
   const totalBalance = getAssetAccountBalance(accounts);
 
   return NextResponse.json({ accounts, totalBalance });
