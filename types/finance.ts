@@ -246,6 +246,8 @@ export type AdvisorSummary = {
     monthlyExpense: number;
     safeDailyLimit: number;
     daysLeftInMonth: number;
+    daysUntilZero: number | null;
+    requiredPaymentsBeforeMonthEnd: number;
   };
   accounts: Array<{
     name: string;
@@ -261,14 +263,43 @@ export type AdvisorSummary = {
     overLimit: number;
     minimalPayment: number | null;
     paymentDate: string | null;
+    monthlySpending: number;
+    last30DaysSpending: number;
+    last30DaysRepayments: number;
+    recentSpending: Array<{
+      date: string;
+      amount: number;
+      type: string;
+      description: string;
+      categoryName: string;
+      accountName: string;
+      accountType: string;
+    }>;
+    recentRepayments: Array<{
+      date: string;
+      amount: number;
+      source: string;
+      fromAccountName: string;
+      description: string;
+    }>;
   }>;
   loans: Array<{
     title: string;
+    lender: string | null;
     debtType: DebtType;
     remainingDebt: number;
     plannedPayment: number;
     progressPercent: number | null;
     paymentDate: string | null;
+    priority: DebtPriority;
+    monthRepaymentTotal: number;
+    monthRepaymentCount: number;
+    recentPayments: Array<{
+      date: string;
+      amount: number;
+      appliedAmount: number;
+      description: string;
+    }>;
   }>;
   transactions: {
     topExpenseCategories: Array<{
@@ -276,9 +307,39 @@ export type AdvisorSummary = {
       amount: number;
       count: number;
     }>;
+    largestTransactions: Array<{
+      date: string;
+      amount: number;
+      type: string;
+      description: string;
+      categoryName: string;
+      accountName: string;
+      accountType: string;
+    }>;
+    expensesByAccount: Array<{
+      accountName: string;
+      accountType: string;
+      amount: number;
+      count: number;
+    }>;
+    incomeSources: Array<{
+      name: string;
+      amount: number;
+      count: number;
+    }>;
+    fastestGrowingCategories: Array<{
+      categoryName: string;
+      last7Days: number;
+      previous7Days: number;
+      growth: number;
+      growthPercent: number | null;
+    }>;
     trend: {
       last7DaysExpense: number;
       previous7DaysExpense: number;
+      last30DaysExpense: number;
+      averageDailyLast7Days: number;
+      averageDailyLast30Days: number;
       change: number;
     };
     leakage: {
@@ -297,6 +358,11 @@ export type AdvisorSummary = {
         total: number;
       }>;
     };
+  };
+  dataQuality: {
+    incomeStatus: "missing_or_zero" | "suspiciously_low" | "present";
+    incomeTransactionCount: number;
+    warnings: string[];
   };
 };
 

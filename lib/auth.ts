@@ -27,6 +27,21 @@ const authUserCache = new Map<
     expiresAt: number;
   }
 >();
+const refreshSessionRequests = new Map<string, Promise<SupabaseSession | null>>();
+
+function getAuthCookieOptions(maxAge: number) {
+  return {
+    httpOnly: true,
+    sameSite: "lax" as const,
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge
+  };
+}
+
+function logAuthFailure(reason: string, details: Record<string, unknown> = {}) {
+  console.warn("[auth]", reason, details);
+}
 
 function getJwtExpiresAt(token: string) {
   try {
@@ -109,45 +124,151 @@ export async function supabaseAuthFetch(path: string, init: RequestInit = {}) {
   });
 }
 
-export async function requireAuth(): Promise<AuthUser | NextResponse> {
-  const token = cookies().get(accessTokenCookie)?.value;
-
-  if (!token) {
-    return authJsonError();
-  }
-
+async function getAuthUserFromAccessToken(token: string) {
   const cachedUser = readCachedAuthUser(token);
 
   if (cachedUser) {
     return cachedUser;
   }
 
-  try {
-    const response = await supabaseAuthFetch("/user", {
-      headers: {
-        Authorization: `Bearer ${token}`
+  const response = await supabaseAuthFetch("/user", {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  if (!response.ok) {
+    logAuthFailure("supabase_user_check_failed", { status: response.status });
+    return null;
+  }
+
+  const user = await response.json().catch(() => null);
+
+  if (!user?.id) {
+    logAuthFailure("supabase_user_missing_id");
+    return null;
+  }
+
+  const authUser = {
+    userId: user.id,
+    email: user.email ?? null
+  };
+
+  cacheAuthUser(token, authUser);
+
+  return authUser;
+}
+
+async function refreshSupabaseSession(refreshToken: string) {
+  const existing = refreshSessionRequests.get(refreshToken);
+
+  if (existing) {
+    return existing;
+  }
+
+  const request = supabaseAuthFetch("/token?grant_type=refresh_token", {
+    method: "POST",
+    body: JSON.stringify({ refresh_token: refreshToken })
+  })
+    .then(async (response) => {
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok || !data?.access_token) {
+        logAuthFailure("supabase_refresh_failed", { status: response.status });
+        return null;
       }
+
+      return data as SupabaseSession;
+    })
+    .catch((error) => {
+      logAuthFailure("supabase_refresh_request_error", {
+        message: error instanceof Error ? error.message : "unknown"
+      });
+      return null;
+    })
+    .finally(() => {
+      refreshSessionRequests.delete(refreshToken);
     });
 
-    if (!response.ok) {
+  refreshSessionRequests.set(refreshToken, request);
+  return request;
+}
+
+function setAuthCookiesInStore(session: SupabaseSession) {
+  if (!session.access_token) {
+    return;
+  }
+
+  const store = cookies();
+  const accessMaxAge = Math.max(60, session.expires_in ?? 3600);
+
+  store.set(accessTokenCookie, session.access_token, getAuthCookieOptions(accessMaxAge));
+
+  if (session.refresh_token) {
+    store.set(
+      refreshTokenCookie,
+      session.refresh_token,
+      getAuthCookieOptions(60 * 60 * 24 * 30)
+    );
+  }
+}
+
+function clearAuthCookiesInStore() {
+  const store = cookies();
+  store.set(accessTokenCookie, "", getAuthCookieOptions(0));
+  store.set(refreshTokenCookie, "", getAuthCookieOptions(0));
+}
+
+export async function requireAuth(): Promise<AuthUser | NextResponse> {
+  const store = cookies();
+  const token = store.get(accessTokenCookie)?.value;
+  const refreshToken = store.get(refreshTokenCookie)?.value;
+
+  try {
+    if (token) {
+      const authUser = await getAuthUserFromAccessToken(token);
+
+      if (authUser) {
+        return authUser;
+      }
+    }
+
+    if (!refreshToken) {
+      logAuthFailure("auth_missing_refresh_token", { hasAccessToken: Boolean(token) });
       return authJsonError();
     }
 
-    const user = await response.json();
+    const refreshedSession = await refreshSupabaseSession(refreshToken);
 
-    if (!user?.id) {
-      return authJsonError();
+    if (!refreshedSession?.access_token) {
+      clearAuthCookiesInStore();
+      return authJsonError("Сессия истекла. Войдите снова");
     }
 
-    const authUser = {
-      userId: user.id,
-      email: user.email ?? null
-    };
+    setAuthCookiesInStore(refreshedSession);
 
-    cacheAuthUser(token, authUser);
+    if (refreshedSession.user?.id) {
+      const authUser = {
+        userId: refreshedSession.user.id,
+        email: refreshedSession.user.email ?? null
+      };
 
-    return authUser;
-  } catch {
+      cacheAuthUser(refreshedSession.access_token, authUser);
+      return authUser;
+    }
+
+    const authUser = await getAuthUserFromAccessToken(refreshedSession.access_token);
+
+    if (authUser) {
+      return authUser;
+    }
+
+    clearAuthCookiesInStore();
+    return authJsonError("Сессия истекла. Войдите снова");
+  } catch (error) {
+    logAuthFailure("auth_check_error", {
+      message: error instanceof Error ? error.message : "unknown"
+    });
     return authJsonError();
   }
 }
@@ -157,41 +278,24 @@ export function setAuthCookies(response: NextResponse, session: SupabaseSession)
     return;
   }
 
-  const secure = process.env.NODE_ENV === "production";
   const accessMaxAge = Math.max(60, session.expires_in ?? 3600);
 
   response.cookies.set(accessTokenCookie, session.access_token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure,
-    path: "/",
-    maxAge: accessMaxAge
+    ...getAuthCookieOptions(accessMaxAge)
   });
 
   if (session.refresh_token) {
     response.cookies.set(refreshTokenCookie, session.refresh_token, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure,
-      path: "/",
-      maxAge: 60 * 60 * 24 * 30
+      ...getAuthCookieOptions(60 * 60 * 24 * 30)
     });
   }
 }
 
 export function clearAuthCookies(response: NextResponse) {
   response.cookies.set(accessTokenCookie, "", {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 0
+    ...getAuthCookieOptions(0)
   });
   response.cookies.set(refreshTokenCookie, "", {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 0
+    ...getAuthCookieOptions(0)
   });
 }

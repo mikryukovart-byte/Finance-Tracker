@@ -39,7 +39,8 @@ function buildTopExpenseCategories(
     type: string;
     categoryId: string | null;
     category: { name: string } | null;
-  }>
+  }>,
+  limit = 10
 ) {
   const categories = new Map<string, { name: string; amount: number; count: number }>();
 
@@ -60,7 +61,184 @@ function buildTopExpenseCategories(
 
   return Array.from(categories.values())
     .sort((a, b) => b.amount - a.amount)
-    .slice(0, 5);
+    .slice(0, limit);
+}
+
+function sumAmounts(items: Array<{ amount: number }>) {
+  return items.reduce((sum, item) => sum + item.amount, 0);
+}
+
+function compactDescription(value: string | null, fallback = "Без описания") {
+  const normalized = (value || fallback).trim().replace(/\s+/g, " ");
+
+  if (normalized.length <= 80) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 77)}...`;
+}
+
+function normalizeDescription(value: string | null) {
+  return compactDescription(value).toLocaleLowerCase("ru-RU");
+}
+
+function transactionSnapshot(transaction: {
+  amount: number;
+  type: string;
+  date: Date;
+  description: string | null;
+  category: { name: string } | null;
+  account: { name: string; type: string } | null;
+}) {
+  return {
+    date: transaction.date.toISOString(),
+    amount: transaction.amount,
+    type: transaction.type,
+    description: compactDescription(transaction.description),
+    categoryName: transaction.category?.name ?? "Без категории",
+    accountName: transaction.account?.name ?? "Без счета",
+    accountType: transaction.account?.type ?? "UNKNOWN"
+  };
+}
+
+function buildLargestTransactions(
+  transactions: Array<{
+    amount: number;
+    type: string;
+    date: Date;
+    description: string | null;
+    category: { name: string } | null;
+    account: { name: string; type: string } | null;
+  }>
+) {
+  return transactions
+    .filter((transaction) => transaction.type === "EXPENSE" || transaction.type === "INCOME")
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 10)
+    .map(transactionSnapshot);
+}
+
+function buildExpensesByAccount(
+  transactions: Array<{
+    amount: number;
+    type: string;
+    accountId: string | null;
+    account: { name: string; type: string } | null;
+  }>
+) {
+  const accounts = new Map<
+    string,
+    { accountName: string; accountType: string; amount: number; count: number }
+  >();
+
+  for (const transaction of transactions) {
+    if (transaction.type !== "EXPENSE") {
+      continue;
+    }
+
+    const key = transaction.accountId ?? "no-account";
+    const current = accounts.get(key) ?? {
+      accountName: transaction.account?.name ?? "Без счета",
+      accountType: transaction.account?.type ?? "UNKNOWN",
+      amount: 0,
+      count: 0
+    };
+    current.amount += transaction.amount;
+    current.count += 1;
+    accounts.set(key, current);
+  }
+
+  return Array.from(accounts.values())
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 10);
+}
+
+function buildIncomeSources(
+  transactions: Array<{
+    amount: number;
+    type: string;
+    description: string | null;
+    categoryId: string | null;
+    category: { name: string } | null;
+  }>
+) {
+  const sources = new Map<string, { name: string; amount: number; count: number }>();
+
+  for (const transaction of transactions) {
+    if (transaction.type !== "INCOME") {
+      continue;
+    }
+
+    const key = transaction.categoryId
+      ? `category:${transaction.categoryId}`
+      : `description:${normalizeDescription(transaction.description)}`;
+    const current = sources.get(key) ?? {
+      name: transaction.category?.name ?? compactDescription(transaction.description, "Доход без источника"),
+      amount: 0,
+      count: 0
+    };
+    current.amount += transaction.amount;
+    current.count += 1;
+    sources.set(key, current);
+  }
+
+  return Array.from(sources.values())
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 10);
+}
+
+function buildCategoryGrowth(
+  transactions: Array<{
+    amount: number;
+    type: string;
+    date: Date;
+    categoryId: string | null;
+    category: { name: string } | null;
+  }>,
+  currentStart: Date,
+  currentEnd: Date,
+  previousStart: Date
+) {
+  const categories = new Map<
+    string,
+    { categoryName: string; last7Days: number; previous7Days: number; growth: number; growthPercent: number | null }
+  >();
+
+  for (const transaction of transactions) {
+    if (transaction.type !== "EXPENSE") {
+      continue;
+    }
+
+    const key = transaction.categoryId ?? "no-category";
+    const current = categories.get(key) ?? {
+      categoryName: transaction.category?.name ?? "Без категории",
+      last7Days: 0,
+      previous7Days: 0,
+      growth: 0,
+      growthPercent: null
+    };
+
+    if (transaction.date >= currentStart && transaction.date < currentEnd) {
+      current.last7Days += transaction.amount;
+    } else if (transaction.date >= previousStart && transaction.date < currentStart) {
+      current.previous7Days += transaction.amount;
+    }
+
+    categories.set(key, current);
+  }
+
+  return Array.from(categories.values())
+    .map((category) => ({
+      ...category,
+      growth: category.last7Days - category.previous7Days,
+      growthPercent:
+        category.previous7Days > 0
+          ? ((category.last7Days - category.previous7Days) / category.previous7Days) * 100
+          : null
+    }))
+    .filter((category) => category.growth > 0 && category.last7Days > 0)
+    .sort((a, b) => b.growth - a.growth)
+    .slice(0, 10);
 }
 
 function sumExpenses(
@@ -147,9 +325,22 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
   const todayStart = startOfDay(now);
   const last7Start = startOfDay(daysBefore(now, 6));
   const previous7Start = startOfDay(daysBefore(now, 13));
+  const last30Start = startOfDay(daysBefore(now, 29));
+  const tomorrowStart = new Date(
+    todayStart.getFullYear(),
+    todayStart.getMonth(),
+    todayStart.getDate() + 1
+  );
   const threshold = parseLeakageThreshold(null);
 
-  const [monthTransactions, trendTransactions, loans, accounts] = await Promise.all([
+  const [
+    monthTransactions,
+    trendTransactions,
+    loans,
+    accounts,
+    recentTransfers,
+    monthLoanPayments
+  ] = await Promise.all([
     prisma.transaction.findMany({
       where: {
         userId,
@@ -172,6 +363,13 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
             name: true,
             type: true
           }
+        },
+        accountId: true,
+        account: {
+          select: {
+            name: true,
+            type: true
+          }
         }
       },
       orderBy: [{ date: "desc" }, { createdAt: "desc" }]
@@ -180,21 +378,38 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
       where: {
         userId,
         date: {
-          gte: previous7Start,
-          lt: new Date(todayStart.getFullYear(), todayStart.getMonth(), todayStart.getDate() + 1)
+          gte: last30Start,
+          lt: tomorrowStart
         }
       },
       select: {
         amount: true,
         type: true,
-        date: true
+        date: true,
+        description: true,
+        categoryId: true,
+        accountId: true,
+        createdAt: true,
+        category: {
+          select: {
+            name: true
+          }
+        },
+        account: {
+          select: {
+            name: true,
+            type: true
+          }
+        }
       }
     }),
     prisma.loan.findMany({
       where: { userId, status: { not: "CLOSED" } },
       select: {
+        id: true,
         debtType: true,
         title: true,
+        lender: true,
         initialAmount: true,
         remainingAmount: true,
         monthlyPayment: true,
@@ -202,12 +417,24 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
         minimalPayment: true,
         paymentDate: true,
         accountId: true,
+        priority: true,
         status: true,
         account: {
           select: {
             currentDebt: true,
             minimalPayment: true
           }
+        },
+        payments: {
+          where: { userId },
+          select: {
+            amount: true,
+            appliedAmount: true,
+            date: true,
+            description: true
+          },
+          orderBy: { date: "desc" },
+          take: 5
         }
       },
       orderBy: [{ paymentDate: "asc" }, { createdAt: "desc" }]
@@ -227,6 +454,49 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
         paymentDate: true
       },
       orderBy: [{ createdAt: "asc" }, { name: "asc" }]
+    }),
+    prisma.transfer.findMany({
+      where: {
+        userId,
+        date: {
+          gte: last30Start,
+          lt: tomorrowStart
+        }
+      },
+      select: {
+        amount: true,
+        date: true,
+        description: true,
+        fromAccountId: true,
+        toAccountId: true,
+        fromAccount: {
+          select: {
+            name: true,
+            type: true
+          }
+        },
+        toAccount: {
+          select: {
+            name: true,
+            type: true
+          }
+        }
+      },
+      orderBy: [{ date: "desc" }, { createdAt: "desc" }]
+    }),
+    prisma.loanPayment.findMany({
+      where: {
+        userId,
+        date: {
+          gte: periodStart,
+          lt: periodEnd
+        }
+      },
+      select: {
+        loanId: true,
+        amount: true,
+        appliedAmount: true
+      }
     })
   ]);
 
@@ -238,33 +508,151 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
     accounts
   );
   const realAccounts = accounts.filter((account) => account.type !== "CREDIT_CARD");
-  const creditCards = accounts
-    .filter((account) => account.type === "CREDIT_CARD")
-    .map((account) => ({
+  const creditCardAccounts = accounts.filter((account) => account.type === "CREDIT_CARD");
+  const loanPaymentTotals = monthLoanPayments.reduce((acc, payment) => {
+    const current = acc.get(payment.loanId) ?? {
+      amount: 0,
+      appliedAmount: 0,
+      count: 0
+    };
+    current.amount += payment.amount;
+    current.appliedAmount += payment.appliedAmount ?? payment.amount;
+    current.count += 1;
+    acc.set(payment.loanId, current);
+    return acc;
+  }, new Map<string, { amount: number; appliedAmount: number; count: number }>());
+  const creditCards = creditCardAccounts.map((account) => {
+    const cardMonthTransactions = monthTransactions.filter(
+      (transaction) => transaction.accountId === account.id
+    );
+    const cardTrendTransactions = trendTransactions.filter(
+      (transaction) => transaction.accountId === account.id
+    );
+    const incomingTransfers = recentTransfers.filter(
+      (transfer) => transfer.toAccountId === account.id
+    );
+    const incomeRepayments = cardTrendTransactions.filter(
+      (transaction) => transaction.type === "INCOME"
+    );
+    const recentRepayments = [
+      ...incomingTransfers.map((transfer) => ({
+        date: transfer.date.toISOString(),
+        amount: transfer.amount,
+        source: "TRANSFER",
+        fromAccountName: transfer.fromAccount.name,
+        description: compactDescription(transfer.description, "Погашение кредитки")
+      })),
+      ...incomeRepayments.map((transaction) => ({
+        date: transaction.date.toISOString(),
+        amount: transaction.amount,
+        source: "INCOME_OR_REFUND",
+        fromAccountName: transaction.category?.name ?? "Доход / возврат",
+        description: compactDescription(transaction.description, "Поступление на кредитку")
+      }))
+    ]
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 5);
+
+    return {
       name: account.name,
       creditLimit: account.creditLimit ?? 0,
       currentDebt: account.currentDebt,
       availableCredit: account.availableCredit,
       overLimit: Math.max(0, account.currentDebt - (account.creditLimit ?? 0)),
       minimalPayment: account.minimalPayment,
-      paymentDate: account.paymentDate?.toISOString() ?? null
-    }));
+      paymentDate: account.paymentDate?.toISOString() ?? null,
+      monthlySpending: sumAmounts(
+        cardMonthTransactions.filter((transaction) => transaction.type === "EXPENSE")
+      ),
+      last30DaysSpending: sumAmounts(
+        cardTrendTransactions.filter((transaction) => transaction.type === "EXPENSE")
+      ),
+      last30DaysRepayments:
+        sumAmounts(incomingTransfers) + sumAmounts(incomeRepayments),
+      recentSpending: cardTrendTransactions
+        .filter((transaction) => transaction.type === "EXPENSE")
+        .sort(
+          (a, b) =>
+            b.date.getTime() - a.date.getTime() ||
+            b.createdAt.getTime() - a.createdAt.getTime()
+        )
+        .slice(0, 5)
+        .map(transactionSnapshot),
+      recentRepayments
+    };
+  });
   const activeLoans = loans
     .filter((loan) => loan.debtType !== "CREDIT_CARD")
     .map((loan) => ({
       title: loan.title,
+      lender: loan.lender,
       debtType: loan.debtType as AdvisorSummary["loans"][number]["debtType"],
       remainingDebt: loan.remainingAmount,
       plannedPayment: getPlannedDebtPayment(loan),
       progressPercent: getDebtProgress(loan),
-      paymentDate: loan.paymentDate?.toISOString() ?? null
+      paymentDate: loan.paymentDate?.toISOString() ?? null,
+      priority: loan.priority as AdvisorSummary["loans"][number]["priority"],
+      monthRepaymentTotal: loanPaymentTotals.get(loan.id)?.appliedAmount ?? 0,
+      monthRepaymentCount: loanPaymentTotals.get(loan.id)?.count ?? 0,
+      recentPayments: loan.payments.map((payment) => ({
+        date: payment.date.toISOString(),
+        amount: payment.amount,
+        appliedAmount: payment.appliedAmount ?? payment.amount,
+        description: compactDescription(payment.description, "Погашение")
+      }))
     }));
   const last7DaysExpense = sumExpenses(
     trendTransactions,
     last7Start,
-    new Date(todayStart.getFullYear(), todayStart.getMonth(), todayStart.getDate() + 1)
+    tomorrowStart
   );
   const previous7DaysExpense = sumExpenses(trendTransactions, previous7Start, last7Start);
+  const last30DaysExpense = sumExpenses(trendTransactions, last30Start, tomorrowStart);
+  const averageDailyLast7Days = last7DaysExpense / 7;
+  const averageDailyLast30Days = last30DaysExpense / 30;
+  const daysUntilZero =
+    averageDailyLast7Days > 0 ? control.assetBalance / averageDailyLast7Days : null;
+  const isCurrentMonthPayment = (paymentDate: string | null) => {
+    if (!paymentDate) {
+      return false;
+    }
+
+    const date = new Date(paymentDate);
+    return date >= periodStart && date < periodEnd;
+  };
+  const urgentOverLimitAmount = creditCards.reduce((sum, card) => sum + card.overLimit, 0);
+  const requiredPaymentsBeforeMonthEnd =
+    urgentOverLimitAmount +
+    [...creditCards, ...activeLoans].reduce((sum, item) => {
+      const payment = "plannedPayment" in item ? item.plannedPayment : item.minimalPayment ?? 0;
+      return isCurrentMonthPayment(item.paymentDate) ? sum + payment : sum;
+    }, 0);
+  const topExpenseCategories = buildTopExpenseCategories(monthTransactions, 10);
+  const incomeSources = buildIncomeSources(monthTransactions);
+  const incomeTransactionCount = monthTransactions.filter(
+    (transaction) => transaction.type === "INCOME"
+  ).length;
+  const incomeSuspiciouslyLow =
+    control.monthlyIncome > 0 &&
+    control.monthlyExpense > 0 &&
+    control.monthlyIncome < control.monthlyExpense * 0.5;
+  const incomeStatus =
+    control.monthlyIncome <= 0
+      ? "missing_or_zero"
+      : incomeSuspiciouslyLow
+        ? "suspiciously_low"
+        : "present";
+  const dataQualityWarnings = [
+    control.monthlyIncome <= 0 ? "доход не внесен или неполный" : "",
+    incomeSuspiciouslyLow
+      ? "доход выглядит неполным относительно текущих расходов"
+      : "",
+    incomeTransactionCount === 0 ? "нет операций дохода за текущий месяц" : "",
+    accounts.length === 0 ? "нет счетов" : "",
+    topExpenseCategories.length === 0 && control.monthlyExpense > 0
+      ? "часть расходов без категорий"
+      : ""
+  ].filter(Boolean);
 
   return {
     generatedAt: now.toISOString(),
@@ -280,7 +668,9 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
       monthlyIncome: control.monthlyIncome,
       monthlyExpense: control.monthlyExpense,
       safeDailyLimit: control.survival.safeDailyLimit,
-      daysLeftInMonth: control.survival.daysLeftInMonth
+      daysLeftInMonth: control.survival.daysLeftInMonth,
+      daysUntilZero,
+      requiredPaymentsBeforeMonthEnd
     },
     accounts: realAccounts.map((account) => ({
       name: account.name,
@@ -291,10 +681,22 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
     creditCards,
     loans: activeLoans,
     transactions: {
-      topExpenseCategories: buildTopExpenseCategories(monthTransactions),
+      topExpenseCategories,
+      largestTransactions: buildLargestTransactions(monthTransactions),
+      expensesByAccount: buildExpensesByAccount(monthTransactions),
+      incomeSources,
+      fastestGrowingCategories: buildCategoryGrowth(
+        trendTransactions,
+        last7Start,
+        tomorrowStart,
+        previous7Start
+      ),
       trend: {
         last7DaysExpense,
         previous7DaysExpense,
+        last30DaysExpense,
+        averageDailyLast7Days,
+        averageDailyLast30Days,
         change: last7DaysExpense - previous7DaysExpense
       },
       leakage: {
@@ -313,6 +715,11 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
           total: item.total
         }))
       }
+    },
+    dataQuality: {
+      incomeStatus,
+      incomeTransactionCount,
+      warnings: dataQualityWarnings
     }
   };
 }
@@ -332,9 +739,16 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
   const biggestExpense = summary.transactions.topExpenseCategories[0];
   const leakCategory = summary.transactions.leakage.topCategories[0];
   const repeatedLeak = summary.transactions.leakage.repeatedExpenses[0];
+  const fastestGrowingCategory = summary.transactions.fastestGrowingCategories[0];
+  const largestExpenseTransaction = summary.transactions.largestTransactions.find(
+    (transaction) => transaction.type === "EXPENSE"
+  );
+  const biggestExpenseAccount = summary.transactions.expensesByAccount[0];
+  const topIncomeSource = summary.transactions.incomeSources[0];
   const riskyTopCategory =
     biggestExpense && isLifestyleLeakCategory(biggestExpense.name) ? biggestExpense : null;
   const cashflowNegative = summary.totals.monthlyExpense > summary.totals.monthlyIncome;
+  const incomeDataIncomplete = summary.dataQuality.incomeStatus !== "present";
   const noIncomeWithExpenses =
     summary.totals.monthlyIncome <= 0 && summary.totals.monthlyExpense > 0;
   const lowRealMoney = summary.totals.realMoney < 1000;
@@ -386,8 +800,8 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
       summary.totals.netPosition < 0
         ? `Чистая позиция: ${formatRub(summary.totals.netPosition)}. Долги больше собственных денег.`
         : `Чистая позиция: ${formatRub(summary.totals.netPosition)}.`,
-      noIncomeWithExpenses
-        ? `Дохода за месяц нет, расходы уже ${formatRub(summary.totals.monthlyExpense)}. Главная задача — деньги на входе.`
+      incomeDataIncomplete
+        ? `Доход не внесен или неполный. В системе доход: ${formatRub(summary.totals.monthlyIncome)}, расходы: ${formatRub(summary.totals.monthlyExpense)}.`
         : cashflowNegative
           ? `Расходы за месяц выше доходов на ${formatRub(summary.totals.monthlyExpense - summary.totals.monthlyIncome)}.`
           : `Доходы за месяц: ${formatRub(summary.totals.monthlyIncome)}, расходы: ${formatRub(summary.totals.monthlyExpense)}.`,
@@ -406,7 +820,13 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
         ? `Общий долг ${formatRub(summary.totals.totalDebt)} больше реальных денег ${formatRub(summary.totals.realMoney)}.`
         : "",
       noIncomeWithExpenses
-        ? "Нет дохода при положительных расходах. Оптимизация трат не решит проблему без нового дохода."
+        ? "Данных о доходе нет, а расходы есть. Нельзя считать коэффициенты к доходу; сначала нужен подтвержденный денежный вход."
+        : "",
+      summary.totals.requiredPaymentsBeforeMonthEnd > summary.totals.realMoney
+        ? `Платежи до конца месяца ${formatRub(summary.totals.requiredPaymentsBeforeMonthEnd)} выше реальных денег ${formatRub(summary.totals.realMoney)}.`
+        : "",
+      fastestGrowingCategory
+        ? `Быстро растет категория «${fastestGrowingCategory.categoryName}»: +${formatRub(fastestGrowingCategory.growth)} за последние 7 дней.`
         : "",
       strictSpendingStop
         ? `Дневной лимит ниже ${formatRub(100)}. Все необязательные расходы нужно остановить.`
@@ -414,12 +834,15 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
     ]),
     todayActions: clampItems([
       noIncomeWithExpenses
-        ? "Найти ближайший источник дохода: оплата, аванс, возврат долга, продажа лишнего, подработка."
+        ? "Зафиксировать ближайший реальный источник денег: оплата, аванс, возврат долга, продажа лишнего или подработка."
         : "",
       overLimitCards[0]
         ? `Внести платеж по «${overLimitCards[0].name}» минимум на ${formatRub(overLimitCards[0].overLimit)} или зафиксировать дату платежа.`
         : "Проверить все расходы за сегодня и внести пропущенные операции.",
       nextPaymentText ? `Проверить ближайшие платежи: ${nextPaymentText}.` : "",
+      biggestExpense
+        ? `Поставить лимит на «${biggestExpense.name}» до конца дня: не выше ${formatRub(Math.max(0, summary.totals.safeDailyLimit))}.`
+        : "",
       largestDebt
         ? `Следующий свободный платеж направить в «${largestDebt.name}», долг ${formatRub(largestDebt.debt)}.`
         : "Не добавлять новые долги.",
@@ -430,12 +853,15 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
     dontDo: clampItems([
       "Не считать доступный лимит кредитки своими деньгами.",
       noIncomeWithExpenses
-        ? "Не тратить время на мелкую оптимизацию как главную стратегию. Сначала нужен доход."
+        ? "Не делать мелкую оптимизацию главной стратегией. При нулевом доходе главный рычаг — новый денежный вход."
         : cashflowNegative
           ? "Не увеличивать регулярные расходы, пока месячные расходы выше доходов."
           : "Не брать новые обязательства без отдельного источника погашения.",
       riskyTopCategory
         ? `Не продолжать траты в категории «${riskyTopCategory.name}» как будто это мелочь: уже ${formatRub(riskyTopCategory.amount)}.`
+        : "",
+      largestExpenseTransaction
+        ? `Не повторять крупную трату «${largestExpenseTransaction.description}» на ${formatRub(largestExpenseTransaction.amount)} без отдельного дохода.`
         : "",
       strictSpendingStop
         ? "Не использовать кредитку для бытовых покупок: это увеличит долг, а не деньги."
@@ -452,6 +878,9 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
           : "Активных долгов нет.",
       nextPaymentText ? `Ближайшие обязательные платежи: ${nextPaymentText}.` : "",
       "Минимальные платежи закрывать до любых дополнительных покупок.",
+      summary.totals.requiredPaymentsBeforeMonthEnd > 0
+        ? `До конца месяца нужно закрыть платежей минимум на ${formatRub(summary.totals.requiredPaymentsBeforeMonthEnd)}.`
+        : "",
       largestDebt?.payment > 0
         ? `По «${largestDebt.name}» плановый платеж: ${formatRub(largestDebt.payment)}.`
         : ""
@@ -464,6 +893,9 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
       biggestExpense
         ? `Самая большая категория расходов: «${biggestExpense.name}» — ${formatRub(biggestExpense.amount)}.`
         : "Расходов по категориям за месяц пока нет.",
+      biggestExpenseAccount
+        ? `Больше всего расходов идет со счета «${biggestExpenseAccount.accountName}»: ${formatRub(biggestExpenseAccount.amount)}.`
+        : "",
       riskyTopCategory
         ? `Категория «${riskyTopCategory.name}» бьет по бюджету напрямую. Закрыть ее до конца месяца.`
         : "",
@@ -478,11 +910,16 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
       summary.totals.totalDebt > 0
         ? "Пока долг не снижается, доступный лимит кредитки не улучшает финансовую позицию."
         : "Без долгов главная задача — не потерять контроль над регулярными расходами.",
-      noIncomeWithExpenses
-        ? "Без дохода расходы просто уменьшают остаток и двигают к новому долгу."
+      incomeDataIncomplete
+        ? topIncomeSource
+          ? `Доход выглядит неполным. Основной источник «${topIncomeSource.name}» внесен на ${formatRub(topIncomeSource.amount)}.`
+          : "Доход не внесен или неполный. Без подтвержденного дохода расходы просто уменьшают остаток и двигают к новому долгу."
         : "",
       lowRealMoney
         ? "При остатке ниже 1000 ₽ вопрос не в комфорте, а в ближайших обязательных платежах."
+        : "",
+      summary.totals.daysUntilZero !== null
+        ? `При текущем темпе трат деньги закончатся примерно через ${Math.floor(summary.totals.daysUntilZero)} дн.`
         : "",
       debtAboveMoney
         ? `Чтобы выйти в ноль, не хватает ${formatRub(Math.abs(Math.min(0, summary.totals.netPosition)))}.`
@@ -494,12 +931,221 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
   };
 }
 
+function buildOpenAiAdvisorContext(summary: AdvisorSummary) {
+  const totalCreditLimit = summary.creditCards.reduce(
+    (sum, card) => sum + card.creditLimit,
+    0
+  );
+  const creditCardCurrentDebt = summary.creditCards.reduce(
+    (sum, card) => sum + card.currentDebt,
+    0
+  );
+  const availableCreditNotOwnMoney = summary.creditCards.reduce(
+    (sum, card) => sum + card.availableCredit,
+    0
+  );
+  const totalLoanDebt = summary.loans.reduce((sum, loan) => sum + loan.remainingDebt, 0);
+  const minimumPayments = [
+    ...summary.creditCards.map((card) => ({
+      name: card.name,
+      kind: "credit_card",
+      amount: card.minimalPayment ?? 0,
+      dueDate: card.paymentDate,
+      currentDebt: card.currentDebt,
+      overLimit: card.overLimit
+    })),
+    ...summary.loans.map((loan) => ({
+      name: loan.title,
+      kind: loan.debtType,
+      amount: loan.plannedPayment,
+      dueDate: loan.paymentDate,
+      currentDebt: loan.remainingDebt,
+      overLimit: 0
+    }))
+  ]
+    .filter((payment) => payment.amount > 0 || payment.overLimit > 0 || payment.dueDate)
+    .sort((a, b) => {
+      if (a.overLimit !== b.overLimit) {
+        return b.overLimit - a.overLimit;
+      }
+
+      if (a.dueDate && b.dueDate) {
+        return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
+      }
+
+      if (a.dueDate) {
+        return -1;
+      }
+
+      if (b.dueDate) {
+        return 1;
+      }
+
+      return b.currentDebt - a.currentDebt;
+    });
+  const totalMinimumPayments = minimumPayments.reduce(
+    (sum, payment) => sum + payment.amount,
+    0
+  );
+  const incomeDataIncomplete = summary.dataQuality.incomeStatus !== "present";
+  const cashFlowGap = summary.totals.monthlyIncome - summary.totals.monthlyExpense;
+  const trendChange = summary.transactions.trend.change;
+  const trendDirection =
+    trendChange > 0
+      ? "spending_accelerated"
+      : trendChange < 0
+        ? "spending_slowed"
+        : "spending_flat";
+  const accountsByType = [
+    ...summary.accounts.map((account) => ({
+      type: account.type,
+      balance: account.balance,
+      count: 1
+    })),
+    ...summary.creditCards.map(() => ({
+      type: "CREDIT_CARD",
+      balance: 0,
+      count: 1
+    }))
+  ].reduce(
+    (acc, item) => {
+      const current = acc.get(item.type) ?? {
+        type: item.type,
+        balance: 0,
+        count: 0
+      };
+      current.balance += item.balance;
+      current.count += item.count;
+      acc.set(item.type, current);
+      return acc;
+    },
+    new Map<string, { type: string; balance: number; count: number }>()
+  );
+
+  return {
+    contextType: "personal_survival_finance_tracker",
+    period: summary.period,
+    rulesForAdvisor: [
+      "availableCredit is bank credit, not user-owned money",
+      "creditLimit is never income and never cash",
+      "debt reduction has priority over comfort spending",
+      "cash flow matters more than account count or nominal limits",
+      "if incomeDataStatus is missing_or_zero or suspiciously_low, say: доход не внесен или неполный",
+      "do not calculate debt/income ratios when income data is incomplete",
+      "balance adjustments are not income or expense",
+      "must use actual categories, accounts and transactions listed in this context",
+      "recommend concrete actions with numbers, categories and deadlines"
+    ],
+    accounts: {
+      realMoneyOnAccounts: summary.totals.realMoney,
+      byType: Array.from(accountsByType.values()),
+      cashDebitAccounts: summary.accounts,
+      creditCardAccountsAreSeparatedBelow: true
+    },
+    financialPosition: {
+      realMoney: summary.totals.realMoney,
+      totalDebt: summary.totals.totalDebt,
+      netPosition: summary.totals.netPosition,
+      totalLoanDebt,
+      creditCardCurrentDebt,
+      safeDailySpendingLimit: Math.max(0, summary.totals.safeDailyLimit),
+      daysLeftInMonth: summary.totals.daysLeftInMonth,
+      daysUntilZeroAtCurrent7DaySpendingRate: summary.totals.daysUntilZero,
+      requiredPaymentsBeforeMonthEnd: summary.totals.requiredPaymentsBeforeMonthEnd
+    },
+    creditCards: {
+      warning: "availableCredit below is NOT OWN MONEY and must not be added to cash balance",
+      totalCreditLimit,
+      totalCurrentDebt: creditCardCurrentDebt,
+      totalAvailableCreditNotOwnMoney: availableCreditNotOwnMoney,
+      cards: summary.creditCards.map((card) => ({
+        name: card.name,
+        creditLimit: card.creditLimit,
+        currentDebt: card.currentDebt,
+        availableCreditNotOwnMoney: card.availableCredit,
+        overLimit: card.overLimit,
+        minimumPayment: card.minimalPayment,
+        paymentDeadline: card.paymentDate,
+        monthlySpendingFromCard: card.monthlySpending,
+        last30DaysSpendingFromCard: card.last30DaysSpending,
+        last30DaysRepaymentsToCard: card.last30DaysRepayments,
+        recentSpendingFromCard: card.recentSpending,
+        recentRepaymentsToCard: card.recentRepayments
+      }))
+    },
+    loans: summary.loans.map((loan) => ({
+      title: loan.title,
+      lender: loan.lender,
+      debtType: loan.debtType,
+      remainingDebt: loan.remainingDebt,
+      plannedOrMinimumPayment: loan.plannedPayment,
+      priority: loan.priority,
+      progressPercent: loan.progressPercent,
+      paymentDeadline: loan.paymentDate,
+      monthRepaymentTotal: loan.monthRepaymentTotal,
+      monthRepaymentCount: loan.monthRepaymentCount,
+      recentRepaymentHistory: loan.recentPayments
+    })),
+    cashFlow: {
+      monthlyIncome: summary.totals.monthlyIncome,
+      incomeDataStatus: summary.dataQuality.incomeStatus,
+      monthlyExpenses: summary.totals.monthlyExpense,
+      cashFlowGap,
+      debtToIncomeRatioAllowed: !incomeDataIncomplete,
+      incomeSources: summary.transactions.incomeSources,
+      note:
+        "When incomeDataStatus is not present, say доход не внесен или неполный and do not write ratios like debt exceeds income N times."
+    },
+    spending: {
+      expensesByCategoryTop10: summary.transactions.topExpenseCategories,
+      top10LargestTransactions: summary.transactions.largestTransactions,
+      expensesByAccount: summary.transactions.expensesByAccount,
+      categoriesWithFastestGrowth: summary.transactions.fastestGrowingCategories,
+      biggestLeaks: {
+        threshold: summary.transactions.leakage.threshold,
+        totalSmallExpenses: summary.transactions.leakage.totalSmallExpenses,
+        percentOfMonthlyIncome: incomeDataIncomplete
+          ? null
+          : summary.transactions.leakage.percentOfMonthlyIncome,
+        topCategories: summary.transactions.leakage.topCategories,
+        repeatedExpenses: summary.transactions.leakage.repeatedExpenses
+      },
+      trend: {
+        last7DaysExpense: summary.transactions.trend.last7DaysExpense,
+        previous7DaysExpense: summary.transactions.trend.previous7DaysExpense,
+        last30DaysExpense: summary.transactions.trend.last30DaysExpense,
+        averageDailyLast7Days: summary.transactions.trend.averageDailyLast7Days,
+        averageDailyLast30Days: summary.transactions.trend.averageDailyLast30Days,
+        changeVsPrevious7Days: trendChange,
+        direction: trendDirection
+      }
+    },
+    obligations: {
+      totalMinimumPayments,
+      requiredPaymentsBeforeMonthEnd: summary.totals.requiredPaymentsBeforeMonthEnd,
+      paymentItems: minimumPayments,
+      upcomingDeadlines: minimumPayments.filter((payment) => payment.dueDate).slice(0, 6)
+    },
+    dataQuality: {
+      ...summary.dataQuality,
+      missingDataMustBeCalledOut: summary.dataQuality.warnings
+    },
+    spendingLimit: {
+      safeDailySpendingLimit: Math.max(0, summary.totals.safeDailyLimit),
+      daysLeftInMonth: summary.totals.daysLeftInMonth,
+      formula: "realMoneyOnAccounts / daysLeftInMonth"
+    }
+  };
+}
+
 async function callOpenAi(summary: AdvisorSummary): Promise<AdvisorAnalysis> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
 
   if (!apiKey) {
     return buildRuleBasedAnalysis(summary);
   }
+
+  const advisorContext = buildOpenAiAdvisorContext(summary);
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -509,19 +1155,32 @@ async function callOpenAi(summary: AdvisorSummary): Promise<AdvisorAnalysis> {
     },
     body: JSON.stringify({
       model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-      temperature: 0.2,
+      temperature: 0.1,
       response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
-          content:
-            "Ты финансовый советник в личном финансовом трекере. Отвечай на русском, прямо и практично. Без мотивационной воды, без утешений, без медицинских/юридических гарантий. Кредитный лимит и availableCredit кредитной карты НЕ являются деньгами пользователя."
+          content: [
+            "Ты строгий персональный финансовый оператор внутри survival finance tracker.",
+            "Твоя задача — не поддержать морально, а трезво оценить риск, денежный поток и долги.",
+            "Говори на русском. Тон прямой, стратегический, без мотивационной воды и без общих советов.",
+            "Кредитный лимит, availableCredit и доступный остаток кредитки — НЕ деньги пользователя.",
+            "Долги и кассовый разрыв важнее красивого баланса.",
+            "Каждый совет должен быть конкретным: сумма, категория, срок или действие.",
+            "Каждая рекомендация должна опираться на реальные категории, счета, долги или операции из переданного контекста.",
+            "Если наличных/дебетовых денег критически мало, приоритет — деньги на входе и обязательные платежи, а не косметическая оптимизация.",
+            "Запрещены общие фразы без чисел: «save more», «spend less», «track expenses», «экономьте больше», «тратьте меньше», «ведите учет».",
+            "Если доход за месяц 0, отсутствует или помечен как suspiciously_low, напиши точно: «доход не внесен или неполный». Не дели долг на такой доход и не пиши абсурдные коэффициенты.",
+            "Не считай корректировки баланса доходом или расходом.",
+            "Верни только валидный JSON без markdown."
+          ].join("\n")
         },
         {
           role: "user",
           content: [
-            "Проанализируй агрегированную сводку и верни только JSON.",
-            "Формат: {",
+            "Проанализируй структурированный финансовый контекст ниже как строгий финансовый оператор.",
+            "Верни JSON строго в таком формате:",
+            "{",
             '"shortConclusion": string[],',
             '"mainRisk": string[],',
             '"todayActions": string[],',
@@ -530,9 +1189,27 @@ async function callOpenAi(summary: AdvisorSummary): Promise<AdvisorAnalysis> {
             '"spendingLimit": string[],',
             '"hardTruth": string[]',
             "}.",
-            "Каждый пункт короткий, конкретный, с числами где они важны.",
-            "Не считай availableCredit кредитки деньгами пользователя.",
-            JSON.stringify(summary)
+            "Смысл секций:",
+            "- shortConclusion = текущая ситуация: короткий реалистичный диагноз.",
+            "- mainRisk = главная опасность, которая может ударить сейчас.",
+            "- todayActions = ровно 3 конкретных действия на сегодня.",
+            "- dontDo = конкретные запреты: что не делать.",
+            "- debtPriority = стратегия долга: какой долг атаковать первым и почему.",
+            "- spendingLimit = безопасный дневной лимит и как его соблюдать.",
+            "- hardTruth = жесткая правда без мотивации.",
+            "Ограничения:",
+            "- В каждом массиве 1-4 пункта, кроме todayActions: ровно 3 пункта.",
+            "- Используй рубли и числа из контекста.",
+            "- Используй actual user categories, accounts, largest transactions, leaks, payments and deadlines from context.",
+            "- Не называй availableCredit деньгами, остатком пользователя или резервом.",
+            "- Если есть превышение лимита кредитки, это главный приоритет долга.",
+            "- Если incomeDataStatus не present, скажи «доход не внесен или неполный» и не рассчитывай проценты/разы к доходу.",
+            "- Если safeDailySpendingLimit ниже 100 ₽, запрети все необязательные расходы.",
+            "- Если топ категории включают кафе, кофе, алкоголь, фастфуд или развлечения — назови это прямо.",
+            "- Если realMoneyOnAccounts ниже 1000 ₽, не предлагай мелкую оптимизацию как главный план; приоритет — ближайший денежный вход и обязательные платежи.",
+            "- В debtPriority учитывай: over-limit кредитки, paymentDeadline, priority у долгов и minimum/planned payments.",
+            "Финансовый контекст:",
+            JSON.stringify(advisorContext)
           ].join("\n")
         }
       ]

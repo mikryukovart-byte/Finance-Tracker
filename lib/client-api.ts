@@ -11,10 +11,52 @@ let categoriesCache:
 let categoriesRequest: Promise<Category[]> | null = null;
 const jsonCache = new Map<string, { data: unknown; expiresAt: number }>();
 const jsonRequests = new Map<string, Promise<unknown>>();
+let authCheckRequest: Promise<boolean> | null = null;
 
 export async function readErrorMessage(response: Response) {
   const body = await response.json().catch(() => null);
   return body?.message ?? "Не удалось выполнить действие";
+}
+
+async function confirmAuthenticated() {
+  if (!authCheckRequest) {
+    authCheckRequest = fetch("/api/auth/me", { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) {
+          console.warn("[auth] client_auth_check_failed", { status: response.status });
+          return false;
+        }
+
+        return true;
+      })
+      .catch((error) => {
+        console.warn("[auth] client_auth_check_error", {
+          message: error instanceof Error ? error.message : "unknown"
+        });
+        return false;
+      })
+      .finally(() => {
+        authCheckRequest = null;
+      });
+  }
+
+  return authCheckRequest;
+}
+
+async function fetchWithAuthRetry(input: RequestInfo | URL, init?: RequestInit) {
+  const response = await fetch(input, init);
+
+  if (response.status !== 401) {
+    return response;
+  }
+
+  const authenticated = await confirmAuthenticated();
+
+  if (!authenticated) {
+    return response;
+  }
+
+  return fetch(input, init);
 }
 
 export async function fetchCategories(options: { force?: boolean } = {}) {
@@ -28,7 +70,7 @@ export async function fetchCategories(options: { force?: boolean } = {}) {
     return categoriesRequest;
   }
 
-  categoriesRequest = fetch("/api/categories", { cache: "no-store" })
+  categoriesRequest = fetchWithAuthRetry("/api/categories", { cache: "no-store" })
     .then(async (response) => {
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
@@ -134,7 +176,7 @@ export async function fetchJsonCached<T>(
     }
   }
 
-  const request = fetch(url, { cache: "no-store" })
+  const request = fetchWithAuthRetry(url, { cache: "no-store" })
     .then(async (response) => {
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
