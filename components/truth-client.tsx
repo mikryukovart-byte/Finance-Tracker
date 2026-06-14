@@ -8,14 +8,20 @@ import {
   Scale,
   WalletCards
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
 import { EmptyState } from "@/components/empty-state";
 import { Notice } from "@/components/notice";
 import { PageHeader } from "@/components/page-header";
 import { PeriodFilter } from "@/components/period-filter";
 import { StatCard } from "@/components/stat-card";
-import { buildQuery, fetchJsonCached, readClientCache } from "@/lib/client-api";
+import {
+  buildQuery,
+  fetchJsonCached,
+  readClientCache,
+  readErrorMessage,
+  setClientCache
+} from "@/lib/client-api";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
 import { buildPeriodQuery, createPeriodState, describePeriod } from "@/lib/period";
 import { parseSettings, storageKey } from "@/lib/settings";
@@ -43,6 +49,14 @@ function readLeakageThreshold() {
   return Number(settings.leakageThreshold) || 1000;
 }
 
+function numberInputValue(value: number | null | undefined) {
+  return Number.isFinite(value) ? String(value) : "";
+}
+
+function formatOptionalCurrency(value: number | null) {
+  return value === null ? "Недостаточно данных" : formatCurrency(value).replace(/\s/g, "\u00A0");
+}
+
 export function TruthClient() {
   const [data, setData] = useState<TruthResponse | null>(() =>
     readClientCache<TruthResponse>(truthCacheKey(initialTruthPeriod))
@@ -50,6 +64,13 @@ export function TruthClient() {
   const [period, setPeriod] = useState(() => initialTruthPeriod);
   const [loading, setLoading] = useState(() => !data);
   const [error, setError] = useState("");
+  const [crisisMessage, setCrisisMessage] = useState("");
+  const [savingCrisis, setSavingCrisis] = useState(false);
+  const [crisisForm, setCrisisForm] = useState({
+    acuteReliefTarget: "",
+    normalWorkTarget: "",
+    requiredDailyExpense: ""
+  });
 
   useEffect(() => {
     async function loadTruth() {
@@ -81,6 +102,57 @@ export function TruthClient() {
 
     loadTruth();
   }, [period]);
+
+  useEffect(() => {
+    if (!data?.crisis) {
+      return;
+    }
+
+    setCrisisForm({
+      acuteReliefTarget: numberInputValue(data.crisis.settings.acuteReliefTarget),
+      normalWorkTarget: numberInputValue(data.crisis.settings.normalWorkTarget),
+      requiredDailyExpense: numberInputValue(data.crisis.settings.requiredDailyExpense)
+    });
+  }, [data?.crisis]);
+
+  async function saveCrisisSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCrisisMessage("");
+    setSavingCrisis(true);
+
+    try {
+      const response = await fetch("/api/crisis", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          acuteReliefTarget: crisisForm.acuteReliefTarget,
+          normalWorkTarget: crisisForm.normalWorkTarget,
+          requiredDailyExpense: crisisForm.requiredDailyExpense || null
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const crisis = await response.json();
+      setData((current) => {
+        if (!current) {
+          return current;
+        }
+
+        const next = { ...current, crisis };
+        const threshold = readLeakageThreshold();
+        setClientCache(truthCacheKey(period, threshold), next, 12_000);
+        return next;
+      });
+      setCrisisMessage("Антикризисные настройки сохранены");
+    } catch (err) {
+      setCrisisMessage(err instanceof Error ? err.message : "Не удалось сохранить настройки");
+    } finally {
+      setSavingCrisis(false);
+    }
+  }
 
   return (
     <div>
@@ -153,6 +225,142 @@ export function TruthClient() {
               tone="neutral"
             />
           </div>
+
+          <section className="card p-4 sm:p-5">
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-ink">Антикризисный контроль</h2>
+                <p className="mt-1 text-sm text-muted">
+                  Реальные деньги, долги и минимальный запас без учета кредитных лимитов.
+                </p>
+              </div>
+              {data.crisis.isCritical || data.crisis.creditCardOverLimit ? (
+                <div className="rounded-md border border-loss/40 bg-loss/10 px-3 py-2 text-sm text-loss">
+                  Антикризисный режим
+                </div>
+              ) : null}
+            </div>
+
+            {data.crisis.warnings.length > 0 ? (
+              <div className="mb-4 grid gap-2">
+                {data.crisis.warnings.map((warning) => (
+                  <div
+                    key={warning}
+                    className="rounded-md border border-line bg-soft/40 px-3 py-2 text-sm text-ink"
+                  >
+                    {warning}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              <StatCard label="Деньги сейчас" value={formatCurrency(data.crisis.realMoney)} icon={WalletCards} tone={data.crisis.realMoney >= 0 ? "income" : "expense"} showIcon={false} valueNoWrap valueSize="compact" />
+              <StatCard label="Долги всего" value={formatCurrency(data.crisis.totalDebt)} icon={Landmark} tone="expense" showIcon={false} valueNoWrap valueSize="compact" />
+              <StatCard label="Платежи в месяц" value={formatCurrency(data.crisis.monthlyRequiredPayments)} icon={CalendarDays} showIcon={false} valueNoWrap valueSize="compact" />
+              <StatCard
+                label="Проценты / утечки"
+                value={
+                  data.crisis.interestLeakage === null
+                    ? "Данные неполные"
+                    : formatCurrency(data.crisis.interestLeakage)
+                }
+                icon={AlertTriangle}
+                tone={data.crisis.interestLeakage ? "expense" : "neutral"}
+                showIcon={false}
+                valueNoWrap={data.crisis.interestLeakage !== null}
+                valueSize="compact"
+              />
+              <StatCard label="Обязательные расходы на 7 дней" value={formatOptionalCurrency(data.crisis.requiredExpenses7Days)} icon={Scale} showIcon={false} valueNoWrap={data.crisis.requiredExpenses7Days !== null} valueSize="compact" />
+              <StatCard label="Обязательные расходы на 30 дней" value={formatOptionalCurrency(data.crisis.requiredExpenses30Days)} icon={Scale} showIcon={false} valueNoWrap={data.crisis.requiredExpenses30Days !== null} valueSize="compact" />
+              <StatCard
+                label="Дней до нуля"
+                value={
+                  data.crisis.daysUntilZero === null
+                    ? "Недостаточно данных"
+                    : `${formatPercent(Math.max(0, data.crisis.daysUntilZero))} дн.`
+                }
+                icon={Scale}
+                tone={data.crisis.isCritical ? "expense" : "neutral"}
+                showIcon={false}
+                valueNoWrap
+                valueSize="compact"
+              />
+              <StatCard label="Сумма для снятия острой тревоги" value={formatCurrency(data.crisis.acuteReliefTarget)} icon={CircleDollarSign} showIcon={false} valueNoWrap valueSize="compact" />
+              <StatCard label="Сумма для нормальной работы" value={formatCurrency(data.crisis.normalWorkTarget)} icon={CircleDollarSign} showIcon={false} valueNoWrap valueSize="compact" />
+            </div>
+
+            <form className="mt-5 grid gap-4 md:grid-cols-4" onSubmit={saveCrisisSettings}>
+              <div>
+                <label className="field-label" htmlFor="requiredDailyExpense">
+                  Обязательные расходы в день
+                </label>
+                <input
+                  id="requiredDailyExpense"
+                  className="field mt-1"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={crisisForm.requiredDailyExpense}
+                  placeholder="авто по расходам"
+                  onChange={(event) =>
+                    setCrisisForm((current) => ({
+                      ...current,
+                      requiredDailyExpense: event.target.value
+                    }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="field-label" htmlFor="acuteReliefTarget">
+                  Снять острую тревогу
+                </label>
+                <input
+                  id="acuteReliefTarget"
+                  className="field mt-1"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={crisisForm.acuteReliefTarget}
+                  placeholder="14 дней + платежи"
+                  onChange={(event) =>
+                    setCrisisForm((current) => ({
+                      ...current,
+                      acuteReliefTarget: event.target.value
+                    }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="field-label" htmlFor="normalWorkTarget">
+                  Нормальная работа
+                </label>
+                <input
+                  id="normalWorkTarget"
+                  className="field mt-1"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={crisisForm.normalWorkTarget}
+                  placeholder="30 дней + платежи"
+                  onChange={(event) =>
+                    setCrisisForm((current) => ({
+                      ...current,
+                      normalWorkTarget: event.target.value
+                    }))
+                  }
+                />
+              </div>
+              <div className="flex items-end">
+                <button type="submit" className="btn-secondary min-h-11 w-full justify-center" disabled={savingCrisis}>
+                  {savingCrisis ? "Сохраняем" : "Сохранить"}
+                </button>
+              </div>
+              {crisisMessage ? (
+                <div className="text-sm text-muted md:col-span-4">{crisisMessage}</div>
+              ) : null}
+            </form>
+          </section>
 
           <div className="grid gap-4 xl:grid-cols-2">
             <section className="card p-4 sm:p-5">

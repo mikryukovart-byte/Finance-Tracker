@@ -13,15 +13,17 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Notice } from "@/components/notice";
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
+import { WeeklyHypotheses } from "@/components/weekly-hypotheses";
 import {
   fetchJsonCached,
   readClientCache,
   readErrorMessage,
   setClientCache
 } from "@/lib/client-api";
-import { formatCurrency, formatPercent } from "@/lib/format";
+import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
 import type {
   AnnualGoalRow,
+  GoalScenarioKey,
   GoalsResponse,
   MonthlyTaktLevel,
   ThreeYearGoalScenario
@@ -111,6 +113,22 @@ function progressClass(actual: number, target: number, tier: "c1" | "c2" | "c3")
   return tier === "c1" ? "text-loss" : "text-muted";
 }
 
+function scenarioValue(row: AnnualGoalRow | null, scenario: GoalScenarioKey) {
+  if (!row) {
+    return 0;
+  }
+
+  if (scenario === "C1") {
+    return row.c1Value;
+  }
+
+  if (scenario === "C3") {
+    return row.c3Value;
+  }
+
+  return row.c2Value;
+}
+
 function monthStatus(row: AnnualGoalRow, actual: number) {
   if (row.isClosed) {
     return "Закрыто";
@@ -190,6 +208,7 @@ export function GoalsClient() {
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   const [savingTaktLevel, setSavingTaktLevel] = useState<number | null>(null);
   const [savingScenarioSpeed, setSavingScenarioSpeed] = useState<number | null>(null);
+  const [weeklyScenario, setWeeklyScenario] = useState<GoalScenarioKey>("C2");
   const [message, setMessage] = useState("");
   const [tone, setTone] = useState<"neutral" | "success" | "error">("neutral");
   const [settings, setSettings] = useState({
@@ -268,6 +287,16 @@ export function GoalsClient() {
   const gapToC2 = Math.max(0, selectedC2 - selectedActual);
   const selectedRowLabel = selectedRow ? rowLabel(selectedRow) : "—";
   const nextRowLabel = cycleState.nextRow ? rowLabel(cycleState.nextRow) : null;
+  const weeklyRow = data?.weeklyTakt?.rowKey
+    ? rows.find((row) => row.rowKey === data.weeklyTakt.rowKey) ?? selectedRow
+    : selectedRow;
+  const weeklyMonthlyTarget = scenarioValue(weeklyRow, weeklyScenario);
+  const weeklyTarget = weeklyMonthlyTarget / 4;
+  const weeklyDailyTarget = weeklyTarget / 5;
+  const weeklyIncome = data?.weeklyTakt.weeklyIncome ?? 0;
+  const weeklyMonthIncome = data?.weeklyTakt.monthlyIncome ?? 0;
+  const weeklyGap = Math.max(0, weeklyTarget - weeklyIncome);
+  const weeklyMonthGap = Math.max(0, weeklyMonthlyTarget - weeklyMonthIncome);
   const effectivePointA =
     settings.pointAMode === "AUTO" ? data?.autoPointA ?? settings.pointA : settings.pointA;
   const lowerTargetNames = useMemo(() => {
@@ -705,6 +734,106 @@ export function GoalsClient() {
               ? `Текущий статус: План еще не начался. Следующая цель: ${nextRowLabel ?? selectedRowLabel}.`
               : `Текущий уровень: ${selectedRowLabel}${nextRowLabel ? `. Следующая цель: ${nextRowLabel}.` : "."}`}
           </p>
+
+          <section className="card p-4 sm:p-5">
+            <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-ink">Недельный такт</h2>
+                <p className="mt-1 text-sm text-muted">
+                  Месячная цель делится на 4 недели и 5 рабочих дней. Это план действий, не факт дохода.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {(["C1", "C2", "C3"] as const).map((scenario) => (
+                  <button
+                    key={scenario}
+                    type="button"
+                    className={
+                      weeklyScenario === scenario
+                        ? "btn-primary min-h-10 justify-center px-4"
+                        : "btn-secondary min-h-10 justify-center px-4"
+                    }
+                    onClick={() => setWeeklyScenario(scenario)}
+                  >
+                    {scenario}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mb-4 text-sm text-muted">
+              Текущая неделя: {data.weeklyTakt ? formatDate(data.weeklyTakt.weekStartDate) : "—"} —{" "}
+              {data.weeklyTakt ? formatDate(data.weeklyTakt.weekEndDate) : "—"}. Уровень:{" "}
+              {weeklyRow ? rowLabel(weeklyRow) : "—"}.
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
+              <StatCard
+                label="Цель месяца"
+                value={formatCurrencyInline(weeklyMonthlyTarget)}
+                icon={Target}
+                description={weeklyScenario}
+                showIcon={false}
+                valueNoWrap
+                valueSize="compact"
+              />
+              <StatCard
+                label="Цель недели"
+                value={formatCurrencyInline(weeklyTarget)}
+                icon={CalendarDays}
+                description="цель / 4"
+                showIcon={false}
+                valueNoWrap
+                valueSize="compact"
+              />
+              <StatCard
+                label="Цель дня"
+                value={formatCurrencyInline(weeklyDailyTarget)}
+                icon={Gauge}
+                description="неделя / 5"
+                showIcon={false}
+                valueNoWrap
+                valueSize="compact"
+              />
+              <StatCard
+                label="Факт недели"
+                value={formatCurrencyInline(weeklyIncome)}
+                icon={Sigma}
+                tone={weeklyIncome >= weeklyTarget && weeklyTarget > 0 ? "income" : "neutral"}
+                showIcon={false}
+                valueNoWrap
+                valueSize="compact"
+              />
+              <StatCard
+                label="Разрыв недели"
+                value={formatCurrencyInline(weeklyGap)}
+                icon={Sigma}
+                tone={weeklyGap === 0 ? "income" : "expense"}
+                showIcon={false}
+                valueNoWrap
+                valueSize="compact"
+              />
+              <StatCard
+                label="Факт месяца"
+                value={formatCurrencyInline(weeklyMonthIncome)}
+                icon={CalendarDays}
+                showIcon={false}
+                valueNoWrap
+                valueSize="compact"
+              />
+              <StatCard
+                label="Разрыв месяца"
+                value={formatCurrencyInline(weeklyMonthGap)}
+                icon={Sigma}
+                tone={weeklyMonthGap === 0 ? "income" : "expense"}
+                showIcon={false}
+                valueNoWrap
+                valueSize="compact"
+              />
+            </div>
+          </section>
+
+          <WeeklyHypotheses />
 
           <section className="card p-4 sm:p-5">
             <div className="mb-4">

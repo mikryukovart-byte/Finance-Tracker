@@ -7,3 +7,6 @@ prisma/dev.db-journal
 .env
 .DS_Store
 .env
+test-results/
+playwright-report/
+e2e/.auth/

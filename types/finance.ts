@@ -7,6 +7,15 @@ export type CurrencyCode = "RUB" | "USD" | "EUR";
 export type AccountType = "DEBIT" | "CREDIT_CARD";
 export type GoalPointMode = "AUTO" | "MANUAL";
 export type GoalGrowthMode = "LINEAR" | "MANUAL";
+export type GoalScenarioKey = "C1" | "C2" | "C3";
+export type WeeklyHypothesisStatus =
+  | "PLANNED"
+  | "ACTIVE"
+  | "WON"
+  | "FAILED"
+  | "REPEAT"
+  | "CHANGE"
+  | "DROP";
 
 export type Category = {
   id: string;
@@ -172,6 +181,35 @@ export type LeakageStats = {
   }>;
 };
 
+export type CrisisSettings = {
+  id: string;
+  userId?: string;
+  acuteReliefTarget: number;
+  normalWorkTarget: number;
+  requiredDailyExpense: number | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type CrisisControl = {
+  settings: CrisisSettings;
+  realMoney: number;
+  totalDebt: number;
+  monthlyRequiredPayments: number;
+  interestLeakage: number | null;
+  interestDataStatus: "complete" | "incomplete";
+  requiredDailyExpenses: number | null;
+  requiredExpenses7Days: number | null;
+  requiredExpenses30Days: number | null;
+  daysUntilZero: number | null;
+  acuteReliefTarget: number;
+  normalWorkTarget: number;
+  isCritical: boolean;
+  creditCardOverLimit: boolean;
+  creditCardOverLimitAmount: number;
+  warnings: string[];
+};
+
 export type TruthResponse = {
   balance: number;
   assetBalance: number;
@@ -185,6 +223,7 @@ export type TruthResponse = {
   survival: SurvivalStats;
   leakage: LeakageStats;
   debtSummary: LoansResponse["summary"];
+  crisis: CrisisControl;
 };
 
 export type ReportsResponse = {
@@ -366,6 +405,22 @@ export type AdvisorSummary = {
     incomeTransactionCount: number;
     warnings: string[];
   };
+  crisis: Pick<
+    CrisisControl,
+    | "realMoney"
+    | "totalDebt"
+    | "monthlyRequiredPayments"
+    | "requiredDailyExpenses"
+    | "daysUntilZero"
+    | "acuteReliefTarget"
+    | "normalWorkTarget"
+    | "isCritical"
+    | "creditCardOverLimit"
+    | "creditCardOverLimitAmount"
+    | "warnings"
+  > | null;
+  weeklyTakt: WeeklyTakt | null;
+  weeklyHypotheses: WeeklyHypothesis[];
   annualGoals: {
     year: number;
     pointA: number;
@@ -477,12 +532,44 @@ export type AnnualIncomeFact = {
   actualIncome: number;
 };
 
+export type WeeklyTakt = {
+  selectedScenario: GoalScenarioKey;
+  rowKey: string | null;
+  rowLabel: string;
+  monthlyTarget: number;
+  weeklyTarget: number;
+  dailyTarget: number;
+  weeklyIncome: number;
+  monthlyIncome: number;
+  weeklyGap: number;
+  monthlyGap: number;
+  weekStartDate: string;
+  weekEndDate: string;
+  monthStartDate: string;
+  monthEndDate: string;
+};
+
 export type GoalsResponse = {
   plan: AnnualGoalPlan;
   facts: AnnualIncomeFact[];
   taktLevels: MonthlyTaktLevel[];
   threeYearScenarios: ThreeYearGoalScenario[];
+  weeklyTakt: WeeklyTakt;
   autoPointA: number;
+};
+
+export type WeeklyHypothesis = {
+  id: string;
+  userId?: string;
+  weekStartDate: string;
+  title: string;
+  actionPlan: string;
+  expectedResult: string | null;
+  actualResult: string | null;
+  conclusion: string | null;
+  status: WeeklyHypothesisStatus;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type CategoryBreakdownItem = {

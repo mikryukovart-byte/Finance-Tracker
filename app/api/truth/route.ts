@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { isAuthError, requireAuth } from "@/lib/auth";
+import { getCrisisControl } from "@/lib/crisis";
 import { dateRangeFromSearch } from "@/lib/date-ranges";
 import {
   getFinancialControlData,
@@ -25,9 +26,12 @@ export async function GET(request: Request) {
   const threshold = parseLeakageThreshold(url.searchParams.get("leakageThreshold"));
   const range = dateRangeFromSearch(url.searchParams);
   const dbStarted = Date.now();
-  const data = await getFinancialControlData(auth.userId, threshold, range);
+  const [data, crisis] = await Promise.all([
+    getFinancialControlData(auth.userId, threshold, range),
+    getCrisisControl(auth.userId)
+  ]);
   timer.mark("db", dbStarted);
   timer.done();
 
-  return NextResponse.json(data);
+  return NextResponse.json({ ...data, crisis });
 }

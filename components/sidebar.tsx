@@ -39,7 +39,10 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="border-b border-line bg-sidebar px-4 py-4 text-[#bcbab7] lg:sticky lg:top-0 lg:h-screen lg:border-b-0 lg:border-r lg:px-4 lg:py-5">
+    <aside
+      data-testid="sidebar"
+      className="border-b border-line bg-sidebar px-4 py-4 text-[#bcbab7] lg:sticky lg:top-0 lg:h-screen lg:border-b-0 lg:border-r lg:px-4 lg:py-5"
+    >
       <div className="flex items-center justify-between gap-4 lg:block">
         <Link href="/" className="block">
           <div className="text-base font-semibold text-[#f0efed]">Финансы</div>

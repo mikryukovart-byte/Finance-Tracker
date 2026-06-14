@@ -204,3 +204,32 @@ model ThreeYearGoalScenario {
   @@unique([userId, year, speed])
   @@index([userId, year])
 }
+
+model CrisisSettings {
+  id                   String   @id @default(cuid())
+  userId               String   @unique
+  acuteReliefTarget    Float    @default(0)
+  normalWorkTarget     Float    @default(0)
+  requiredDailyExpense Float?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model WeeklyHypothesis {
+  id             String   @id @default(cuid())
+  userId         String
+  weekStartDate  DateTime
+  title          String
+  actionPlan     String
+  expectedResult String?
+  actualResult   String?
+  conclusion     String?
+  status         String   @default("PLANNED")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([userId, weekStartDate])
+  @@index([userId, status])
+}

@@ -175,7 +175,8 @@ export function invalidateFinancialDataCache() {
     "reports:",
     "transactions:",
     "transfers:",
-    "truth:"
+    "truth:",
+    "weekly-hypotheses:"
   ].forEach((prefix) => invalidateClientCache(prefix));
 }
 

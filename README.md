@@ -36,6 +36,31 @@ npm run dev
 
 Для локальной работы нужен доступ к Supabase-проекту и заполненные переменные окружения.
 
+## E2E smoke-тесты
+
+Playwright-тесты ожидают, что локальный сервер уже запущен на `http://localhost:3000`.
+
+Терминал 1:
+
+```bash
+npm run dev
+```
+
+В `.env` укажите отдельный тестовый аккаунт:
+
+```bash
+E2E_TEST_EMAIL="test@example.com"
+E2E_TEST_PASSWORD="password"
+```
+
+Терминал 2:
+
+```bash
+npm run test:e2e:headed
+```
+
+Перед smoke-тестами Playwright выполнит отдельный auth setup: войдет через `/login` и сохранит состояние браузера в `e2e/.auth/user.json`.
+
 ## Миграции
 
 После создания Supabase-проекта примените миграции:

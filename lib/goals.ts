@@ -1,6 +1,13 @@
 import { Prisma } from "@prisma/client";
 
+import {
+  endOfMonth,
+  endOfWeek,
+  startOfMonth,
+  startOfWeek
+} from "@/lib/date-ranges";
 import { prisma } from "@/lib/prisma";
+import type { WeeklyTakt } from "@/types/finance";
 
 export const goalRowKeys = [
   "A",
@@ -86,6 +93,13 @@ export type GoalsPayloadOptions = {
 type SelectedGoalRow = SelectedGoalPlan["rows"][number];
 type SelectedTaktLevel = Prisma.MonthlyTaktLevelGetPayload<{}>;
 type SelectedThreeYearScenario = Prisma.ThreeYearGoalScenarioGetPayload<{}>;
+type HydratedGoalRow = SelectedGoalRow & {
+  calendarMonth?: number;
+  calendarYear?: number;
+  periodStart?: Date;
+  periodEnd?: Date;
+  isReserve?: boolean;
+};
 
 type JsonGoalRow = Omit<SelectedGoalRow, "createdAt" | "updatedAt"> & {
   createdAt: Date | string;
@@ -582,6 +596,96 @@ function rowAssignment(planStartDate: Date, rowKey: GoalRowKey): RowAssignment {
   };
 }
 
+function rowLabel(row: HydratedGoalRow) {
+  if (!row.calendarMonth || !row.calendarYear) {
+    return row.rowKey;
+  }
+
+  return `${row.rowKey} · ${String(row.calendarMonth).padStart(2, "0")}.${row.calendarYear}`;
+}
+
+function currentCycleRow(rows: HydratedGoalRow[], now = new Date()) {
+  const rowsWithDates = rows.filter((row) => row.calendarMonth && row.calendarYear);
+
+  if (!rowsWithDates.length) {
+    return rows[0] ?? null;
+  }
+
+  const currentMonthKey = now.getFullYear() * 12 + now.getMonth();
+  const current = rowsWithDates.find((row) => {
+    const rowMonthKey = (row.calendarYear ?? 0) * 12 + (row.calendarMonth ?? 1) - 1;
+    return rowMonthKey === currentMonthKey;
+  });
+
+  if (current) {
+    return current;
+  }
+
+  const first = rowsWithDates[0];
+  const firstMonthKey =
+    (first.calendarYear ?? 0) * 12 + (first.calendarMonth ?? 1) - 1;
+
+  return currentMonthKey < firstMonthKey ? first : rowsWithDates[rowsWithDates.length - 1];
+}
+
+async function getWeeklyIncomeFacts(userId: string, now = new Date()) {
+  const weekStart = startOfWeek(now);
+  const weekEnd = endOfWeek(now);
+  const monthStart = startOfMonth(now);
+  const monthEnd = endOfMonth(now);
+  const [result] = await prisma.$queryRaw<
+    Array<{ "weeklyIncome": number | string | null; "monthlyIncome": number | string | null }>
+  >`
+    SELECT
+      COALESCE(SUM("amount") FILTER (
+        WHERE "date" >= ${weekStart} AND "date" < ${weekEnd}
+      ), 0)::float AS "weeklyIncome",
+      COALESCE(SUM("amount") FILTER (
+        WHERE "date" >= ${monthStart} AND "date" < ${monthEnd}
+      ), 0)::float AS "monthlyIncome"
+    FROM "Transaction"
+    WHERE "userId" = ${userId}
+      AND "type" = 'INCOME'
+      AND "date" >= ${weekStart < monthStart ? weekStart : monthStart}
+      AND "date" < ${weekEnd > monthEnd ? weekEnd : monthEnd}
+  `;
+
+  return {
+    weeklyIncome: Number(result?.weeklyIncome ?? 0),
+    monthlyIncome: Number(result?.monthlyIncome ?? 0),
+    weekStart,
+    weekEnd,
+    monthStart,
+    monthEnd
+  };
+}
+
+async function buildWeeklyTakt(userId: string, plan: SelectedGoalPlan): Promise<WeeklyTakt> {
+  const now = new Date();
+  const row = currentCycleRow(plan.rows as HydratedGoalRow[], now);
+  const monthlyTarget = row?.c2Value ?? 0;
+  const weeklyTarget = monthlyTarget / 4;
+  const dailyTarget = weeklyTarget / 5;
+  const facts = await getWeeklyIncomeFacts(userId, now);
+
+  return {
+    selectedScenario: "C2",
+    rowKey: row?.rowKey ?? null,
+    rowLabel: row ? rowLabel(row) : "—",
+    monthlyTarget,
+    weeklyTarget,
+    dailyTarget,
+    weeklyIncome: facts.weeklyIncome,
+    monthlyIncome: facts.monthlyIncome,
+    weeklyGap: Math.max(0, weeklyTarget - facts.weeklyIncome),
+    monthlyGap: Math.max(0, monthlyTarget - facts.monthlyIncome),
+    weekStartDate: facts.weekStart.toISOString(),
+    weekEndDate: new Date(facts.weekEnd.getTime() - 1).toISOString(),
+    monthStartDate: facts.monthStart.toISOString(),
+    monthEndDate: new Date(facts.monthEnd.getTime() - 1).toISOString()
+  };
+}
+
 function isGoalRowKey(value: string): value is GoalRowKey {
   return (goalRowKeys as readonly string[]).includes(value);
 }
@@ -994,12 +1098,14 @@ export async function getGoalsPayload(userId: string, year: number, options?: Go
   }
 
   const hydratedPlan = hydrateGoalPlan(plan, snapshot.autoPointA);
+  const weeklyTakt = await buildWeeklyTakt(userId, hydratedPlan);
 
   return {
     plan: hydratedPlan,
     facts: snapshot.facts,
     taktLevels: snapshot.taktLevels,
     threeYearScenarios: snapshot.threeYearScenarios.map(withCalculatedScenarioValues),
+    weeklyTakt,
     autoPointA: snapshot.autoPointA
   };
 }

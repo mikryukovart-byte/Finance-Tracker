@@ -1,9 +1,12 @@
 import {
+  endOfWeek,
   endOfMonth,
   monthLabel,
   startOfDay,
-  startOfMonth
+  startOfMonth,
+  startOfWeek
 } from "@/lib/date-ranges";
+import { getCrisisControl } from "@/lib/crisis";
 import {
   buildFinancialControlData,
   parseLeakageThreshold
@@ -17,7 +20,8 @@ import { prisma } from "@/lib/prisma";
 import type {
   AdvisorAnalysis,
   AdvisorResponse,
-  AdvisorSummary
+  AdvisorSummary,
+  WeeklyHypothesisStatus
 } from "@/types/finance";
 
 const advisorSections: Array<keyof Omit<AdvisorAnalysis, "source">> = [
@@ -349,6 +353,8 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
   const last7Start = startOfDay(daysBefore(now, 6));
   const previous7Start = startOfDay(daysBefore(now, 13));
   const last30Start = startOfDay(daysBefore(now, 29));
+  const weekStart = startOfWeek(now);
+  const weekEnd = endOfWeek(now);
   const tomorrowStart = new Date(
     todayStart.getFullYear(),
     todayStart.getMonth(),
@@ -364,7 +370,9 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
     recentTransfers,
     monthLoanPayments,
     annualGoalPlan,
-    threeYearGoalScenarios
+    threeYearGoalScenarios,
+    crisisControl,
+    weeklyHypotheses
   ] = await Promise.all([
     prisma.transaction.findMany({
       where: {
@@ -565,6 +573,27 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
         score: true
       },
       orderBy: { speed: "asc" }
+    }),
+    getCrisisControl(userId),
+    prisma.weeklyHypothesis.findMany({
+      where: {
+        userId,
+        weekStartDate: weekStart
+      },
+      select: {
+        id: true,
+        userId: true,
+        weekStartDate: true,
+        title: true,
+        actionPlan: true,
+        expectedResult: true,
+        actualResult: true,
+        conclusion: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true
+      },
+      orderBy: [{ createdAt: "asc" }]
     })
   ]);
 
@@ -786,6 +815,43 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
         note: "Годовые цели являются планом и не считаются фактическим доходом."
       }
     : null;
+  const weeklyTakt =
+    annualGoalPlan && currentGoalRowKey && currentGoalValues
+      ? {
+          selectedScenario: "C2" as const,
+          rowKey: currentGoalRowKey,
+          rowLabel: currentGoalRowKey,
+          monthlyTarget: currentGoalValues.c2Value,
+          weeklyTarget: currentGoalValues.c2Value / 4,
+          dailyTarget: currentGoalValues.c2Value / 20,
+          weeklyIncome: monthTransactions
+            .filter(
+              (transaction) =>
+                transaction.type === "INCOME" &&
+                transaction.date >= weekStart &&
+                transaction.date < weekEnd
+            )
+            .reduce((sum, transaction) => sum + transaction.amount, 0),
+          monthlyIncome: control.monthlyIncome,
+          weeklyGap: Math.max(
+            0,
+            currentGoalValues.c2Value / 4 -
+              monthTransactions
+                .filter(
+                  (transaction) =>
+                    transaction.type === "INCOME" &&
+                    transaction.date >= weekStart &&
+                    transaction.date < weekEnd
+                )
+                .reduce((sum, transaction) => sum + transaction.amount, 0)
+          ),
+          monthlyGap: Math.max(0, currentGoalValues.c2Value - control.monthlyIncome),
+          weekStartDate: weekStart.toISOString(),
+          weekEndDate: new Date(weekEnd.getTime() - 1).toISOString(),
+          monthStartDate: periodStart.toISOString(),
+          monthEndDate: new Date(periodEnd.getTime() - 1).toISOString()
+        }
+      : null;
 
   return {
     generatedAt: now.toISOString(),
@@ -854,6 +920,27 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
       incomeTransactionCount,
       warnings: dataQualityWarnings
     },
+    crisis: {
+      realMoney: crisisControl.realMoney,
+      totalDebt: crisisControl.totalDebt,
+      monthlyRequiredPayments: crisisControl.monthlyRequiredPayments,
+      requiredDailyExpenses: crisisControl.requiredDailyExpenses,
+      daysUntilZero: crisisControl.daysUntilZero,
+      acuteReliefTarget: crisisControl.acuteReliefTarget,
+      normalWorkTarget: crisisControl.normalWorkTarget,
+      isCritical: crisisControl.isCritical,
+      creditCardOverLimit: crisisControl.creditCardOverLimit,
+      creditCardOverLimitAmount: crisisControl.creditCardOverLimitAmount,
+      warnings: crisisControl.warnings
+    },
+    weeklyTakt,
+    weeklyHypotheses: weeklyHypotheses.map((hypothesis) => ({
+      ...hypothesis,
+      status: hypothesis.status as WeeklyHypothesisStatus,
+      weekStartDate: hypothesis.weekStartDate.toISOString(),
+      createdAt: hypothesis.createdAt.toISOString(),
+      updatedAt: hypothesis.updatedAt.toISOString()
+    })),
     annualGoals
   };
 }
@@ -880,6 +967,14 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
   const biggestExpenseAccount = summary.transactions.expensesByAccount[0];
   const topIncomeSource = summary.transactions.incomeSources[0];
   const currentAnnualGoal = summary.annualGoals?.currentMonth ?? null;
+  const weeklyTakt = summary.weeklyTakt;
+  const currentHypothesis = summary.weeklyHypotheses.find((hypothesis) =>
+    hypothesis.status === "ACTIVE" || hypothesis.status === "PLANNED"
+  );
+  const failedHypotheses = summary.weeklyHypotheses.filter(
+    (hypothesis) => hypothesis.status === "FAILED" || hypothesis.status === "DROP"
+  );
+  const crisisWarnings = summary.crisis?.warnings ?? [];
   const riskyTopCategory =
     biggestExpense && isLifestyleLeakCategory(biggestExpense.name) ? biggestExpense : null;
   const cashflowNegative = summary.totals.monthlyExpense > summary.totals.monthlyIncome;
@@ -945,9 +1040,15 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
         : "",
       currentAnnualGoal?.c2Plan
         ? `Годовая цель C2 на текущий месяц: ${formatRub(currentAnnualGoal.c2Plan)}. Факт: ${formatRub(currentAnnualGoal.actualIncome)}.`
+        : "",
+      weeklyTakt
+        ? `Недельный такт C2: цель ${formatRub(weeklyTakt.weeklyTarget)}, факт ${formatRub(weeklyTakt.weeklyIncome)}, разрыв ${formatRub(weeklyTakt.weeklyGap)}.`
         : ""
     ]),
     mainRisk: clampItems([
+      summary.crisis?.isCritical
+        ? `Кризисный режим: реальные деньги ${formatRub(summary.crisis.realMoney)}, расчетных дней до нуля ${summary.crisis.daysUntilZero === null ? "нет данных" : Math.floor(summary.crisis.daysUntilZero)}.`
+        : "",
       lowRealMoney
         ? `На счетах меньше ${formatRub(1000)}. Это риск кассового разрыва, даже без новых покупок.`
         : "",
@@ -969,6 +1070,9 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
       currentAnnualGoal?.gapToC2
         ? `До плана C2 по доходу не хватает ${formatRub(currentAnnualGoal.gapToC2)}. Это цель, не текущие деньги.`
         : "",
+      weeklyTakt?.weeklyGap
+        ? `По недельному такту не хватает ${formatRub(weeklyTakt.weeklyGap)}. Без денежного входа месяц не догоняется сам.`
+        : "",
       strictSpendingStop
         ? `Дневной лимит ниже ${formatRub(100)}. Все необязательные расходы нужно остановить.`
         : ""
@@ -983,6 +1087,9 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
       nextPaymentText ? `Проверить ближайшие платежи: ${nextPaymentText}.` : "",
       currentAnnualGoal?.kpiText
         ? `Отработать КП месяца: «${currentAnnualGoal.kpiText}».`
+        : "",
+      currentHypothesis
+        ? `Сделать действие по гипотезе недели: «${currentHypothesis.actionPlan}». Ожидаемый результат: ${currentHypothesis.expectedResult || "зафиксировать вручную"}.`
         : "",
       biggestExpense
         ? `Поставить лимит на «${biggestExpense.name}» до конца дня: не выше ${formatRub(Math.max(0, summary.totals.safeDailyLimit))}.`
@@ -1009,6 +1116,9 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
         : "",
       strictSpendingStop
         ? "Не использовать кредитку для бытовых покупок: это увеличит долг, а не деньги."
+        : "",
+      failedHypotheses[0]
+        ? `Не повторять без изменений гипотезу «${failedHypotheses[0].title}»: она уже помечена как нерабочая.`
         : "",
       "Не корректировать баланс счета без операции или сверки с банком."
     ]),
@@ -1048,9 +1158,13 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
         : "",
       repeatedLeak
         ? `Повторяется: «${repeatedLeak.description}», ${repeatedLeak.count} раз, всего ${formatRub(repeatedLeak.total)}.`
+        : "",
+      summary.crisis?.requiredDailyExpenses
+        ? `Обязательные расходы в день: ${formatRub(summary.crisis.requiredDailyExpenses)}. Это нижняя граница, не комфортный лимит.`
         : ""
     ], 6),
     hardTruth: clampItems([
+      crisisWarnings[0] ?? "",
       summary.totals.totalDebt > 0
         ? "Пока долг не снижается, доступный лимит кредитки не улучшает финансовую позицию."
         : "Без долгов главная задача — не потерять контроль над регулярными расходами.",
@@ -1070,6 +1184,9 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
         : "",
       creditCardDebt > 0
         ? "Кредитка — инструмент долга. Ее доступный остаток нельзя прибавлять к деньгам на счетах."
+        : "",
+      weeklyTakt?.monthlyGap
+        ? `До месячного такта C2 не хватает ${formatRub(weeklyTakt.monthlyGap)}. Это не закроется экономией на мелочах, если доход не внесен или неполный.`
         : ""
     ])
   };
@@ -1178,6 +1295,8 @@ function buildOpenAiAdvisorContext(summary: AdvisorSummary) {
       "do not calculate debt/income ratios when income data is incomplete",
       "balance adjustments are not income or expense",
       "annual income goals are targets only, not real income",
+      "weekly takt and weekly hypotheses are operating targets only, not real income",
+      "crisis warnings should outrank cosmetic optimization",
       "must use actual categories, accounts and transactions listed in this context",
       "recommend concrete actions with numbers, categories and deadlines"
     ],
@@ -1275,12 +1394,33 @@ function buildOpenAiAdvisorContext(summary: AdvisorSummary) {
       ...summary.dataQuality,
       missingDataMustBeCalledOut: summary.dataQuality.warnings
     },
+    crisisControl: summary.crisis
+      ? {
+          ...summary.crisis,
+          note: "Crisis control describes survival cash flow. It is not a separate balance."
+        }
+      : null,
     annualIncomeGoals: summary.annualGoals
       ? {
           ...summary.annualGoals,
           warning: "Goals are targets only. They are not real income and must not improve cash flow calculations."
         }
       : null,
+    weeklyTakt: summary.weeklyTakt
+      ? {
+          ...summary.weeklyTakt,
+          warning: "Weekly takt is an operating target only, not real income."
+        }
+      : null,
+    weeklyHypotheses: summary.weeklyHypotheses.map((hypothesis) => ({
+      title: hypothesis.title,
+      actionPlan: hypothesis.actionPlan,
+      expectedResult: hypothesis.expectedResult,
+      actualResult: hypothesis.actualResult,
+      conclusion: hypothesis.conclusion,
+      status: hypothesis.status,
+      weekStartDate: hypothesis.weekStartDate
+    })),
     spendingLimit: {
       safeDailySpendingLimit: Math.max(0, summary.totals.safeDailyLimit),
       daysLeftInMonth: summary.totals.daysLeftInMonth,
@@ -1320,10 +1460,12 @@ async function callOpenAi(summary: AdvisorSummary): Promise<AdvisorAnalysis> {
             "Каждый совет должен быть конкретным: сумма, категория, срок или действие.",
             "Каждая рекомендация должна опираться на реальные категории, счета, долги или операции из переданного контекста.",
             "Если наличных/дебетовых денег критически мало, приоритет — деньги на входе и обязательные платежи, а не косметическая оптимизация.",
+            "Если crisisControl сообщает критический режим, начни с выживания денежного потока.",
             "Запрещены общие фразы без чисел: «save more», «spend less», «track expenses», «экономьте больше», «тратьте меньше», «ведите учет».",
             "Если доход за месяц 0, отсутствует или помечен как suspiciously_low, напиши точно: «доход не внесен или неполный». Не дели долг на такой доход и не пиши абсурдные коэффициенты.",
             "Не считай корректировки баланса доходом или расходом.",
             "Годовые цели дохода — это план, а не факт. Не улучшай cash flow и баланс на основе целей.",
+            "Недельный такт и гипотезы недели — это операционный план, не фактический доход.",
             "Верни только валидный JSON без markdown."
           ].join("\n")
         },
@@ -1357,6 +1499,9 @@ async function callOpenAi(summary: AdvisorSummary): Promise<AdvisorAnalysis> {
             "- Если есть превышение лимита кредитки, это главный приоритет долга.",
             "- Если incomeDataStatus не present, скажи «доход не внесен или неполный» и не рассчитывай проценты/разы к доходу.",
             "- Если annualIncomeGoals есть, используй gap и KPI как план действий, но не как фактический доход.",
+            "- Если weeklyTakt есть, используй разрыв недели и месяца для действий на сегодня.",
+            "- Если weeklyHypotheses есть, выбери одну активную/запланированную гипотезу и предложи следующий проверяемый шаг.",
+            "- Если crisisControl.isCritical true, главный риск должен быть кассовый разрыв.",
             "- Если safeDailySpendingLimit ниже 100 ₽, запрети все необязательные расходы.",
             "- Если топ категории включают кафе, кофе, алкоголь, фастфуд или развлечения — назови это прямо.",
             "- Если realMoneyOnAccounts ниже 1000 ₽, не предлагай мелкую оптимизацию как главный план; приоритет — ближайший денежный вход и обязательные платежи.",

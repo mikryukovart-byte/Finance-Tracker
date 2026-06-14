@@ -91,6 +91,7 @@ export function AuthClient() {
             </label>
             <input
               id="email"
+              data-testid="login-email"
               className="field mt-1"
               type="email"
               value={email}
@@ -107,6 +108,7 @@ export function AuthClient() {
             </label>
             <input
               id="password"
+              data-testid="login-password"
               className="field mt-1"
               type="password"
               value={password}
@@ -116,7 +118,12 @@ export function AuthClient() {
             />
           </div>
 
-          <button type="submit" className="btn-primary w-full" disabled={busy}>
+          <button
+            type="submit"
+            data-testid="login-submit"
+            className="btn-primary w-full"
+            disabled={busy}
+          >
             {busy ? "Подождите" : mode === "login" ? "Войти" : "Создать аккаунт"}
           </button>
         </form>
@@ -127,6 +134,7 @@ export function AuthClient() {
 
         <button
           type="button"
+          data-testid="signup-toggle"
           className="mt-4 text-sm font-medium text-muted transition hover:text-ink"
           onClick={() => {
             setMode((current) => (current === "login" ? "register" : "login"));
