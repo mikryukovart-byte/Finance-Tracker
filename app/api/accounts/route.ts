@@ -9,6 +9,7 @@ import {
   getAssetAccountBalance
 } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
+import { createApiTimer } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { accountSchema, firstZodError } from "@/lib/validation";
 
@@ -40,15 +41,28 @@ function getAccounts(userId: string, withCounts: boolean) {
 }
 
 export async function GET(request: Request) {
+  const timer = createApiTimer("/api/accounts");
+  const authStarted = Date.now();
   const auth = await requireAuth();
+  timer.mark("auth", authStarted);
 
   if (isAuthError(auth)) {
+    timer.done({ status: 401 });
     return auth;
   }
 
   const url = new URL(request.url);
-  await ensureDefaultAccount(auth.userId);
-  const accounts = await getAccounts(auth.userId, url.searchParams.get("withCounts") === "1");
+  const withCounts = url.searchParams.get("withCounts") === "1";
+  const dbStarted = Date.now();
+  let accounts = await getAccounts(auth.userId, withCounts);
+
+  if (accounts.length === 0) {
+    await ensureDefaultAccount(auth.userId);
+    accounts = await getAccounts(auth.userId, withCounts);
+  }
+  timer.mark("db", dbStarted);
+  timer.done({ withCounts });
+
   const totalBalance = getAssetAccountBalance(accounts);
 
   return NextResponse.json({ accounts, totalBalance });

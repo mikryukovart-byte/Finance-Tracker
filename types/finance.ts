@@ -5,6 +5,8 @@ export type DebtPriority = "HIGH" | "MEDIUM" | "LOW";
 export type DebtType = "BANK_LOAN" | "CREDIT_CARD" | "PERSONAL_DEBT";
 export type CurrencyCode = "RUB" | "USD" | "EUR";
 export type AccountType = "DEBIT" | "CREDIT_CARD";
+export type GoalPointMode = "AUTO" | "MANUAL";
+export type GoalGrowthMode = "LINEAR" | "MANUAL";
 
 export type Category = {
   id: string;
@@ -364,12 +366,123 @@ export type AdvisorSummary = {
     incomeTransactionCount: number;
     warnings: string[];
   };
+  annualGoals: {
+    year: number;
+    pointA: number;
+    pointAMode: string;
+    planStartDate: string;
+    growthMode: string;
+    finalTargets: {
+      c1: number;
+      c2: number;
+      c3: number;
+    };
+    currentMonth: {
+      month: number;
+      rowKey: string | null;
+      actualIncome: number;
+      c1Plan: number | null;
+      c2Plan: number | null;
+      c3Plan: number | null;
+      gapToC1: number | null;
+      gapToC2: number | null;
+      gapToC3: number | null;
+      kpiText: string | null;
+      signatureText: string | null;
+      isClosed: boolean;
+    };
+    threeYearScenarios: Array<{
+      speed: number;
+      pointC: number;
+      pointD: number;
+      pointE: number;
+      score: number;
+    }>;
+    note: string;
+  } | null;
 };
 
 export type AdvisorResponse = {
   summary: AdvisorSummary;
   analysis: AdvisorAnalysis | null;
   warning?: string;
+};
+
+export type AnnualGoalRow = {
+  id: string;
+  planId: string;
+  rowKey: string;
+  month: number | null;
+  calendarMonth?: number;
+  calendarYear?: number;
+  periodStart?: string;
+  periodEnd?: string;
+  isReserve?: boolean;
+  c1Value: number;
+  c2Value: number;
+  c3Value: number;
+  kpiText: string | null;
+  signatureText: string | null;
+  isClosed: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AnnualGoalPlan = {
+  id: string;
+  userId?: string;
+  year: number;
+  pointA: number;
+  pointAMode: GoalPointMode;
+  planStartDate: string;
+  c1Target: number;
+  c2Target: number;
+  c3Target: number;
+  growthMode: GoalGrowthMode;
+  rows: AnnualGoalRow[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type MonthlyTaktLevel = {
+  id: string;
+  userId?: string;
+  year: number;
+  level: number;
+  description: string;
+  amount: number;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type ThreeYearGoalScenario = {
+  id: string;
+  userId?: string;
+  year: number;
+  speed: number;
+  pointC: number;
+  pointD: number;
+  pointE: number;
+  score: number;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AnnualIncomeFact = {
+  rowKey?: string;
+  month: number;
+  year?: number;
+  periodStart?: string;
+  periodEnd?: string;
+  actualIncome: number;
+};
+
+export type GoalsResponse = {
+  plan: AnnualGoalPlan;
+  facts: AnnualIncomeFact[];
+  taktLevels: MonthlyTaktLevel[];
+  threeYearScenarios: ThreeYearGoalScenario[];
+  autoPointA: number;
 };
 
 export type CategoryBreakdownItem = {

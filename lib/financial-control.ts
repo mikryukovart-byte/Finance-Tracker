@@ -199,18 +199,19 @@ export function buildFinancialControlData(
         dayMs
     )
   );
-  const totalIncome = transactions
-    .filter((transaction) => transaction.type === "INCOME")
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const totalExpense = transactions
-    .filter((transaction) => transaction.type === "EXPENSE")
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const monthlyIncome = transactions
-    .filter((transaction) => transaction.type === "INCOME")
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const monthlyExpense = transactions
-    .filter((transaction) => transaction.type === "EXPENSE")
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  let totalIncome = 0;
+  let totalExpense = 0;
+
+  for (const transaction of transactions) {
+    if (transaction.type === "INCOME") {
+      totalIncome += transaction.amount;
+    } else if (transaction.type === "EXPENSE") {
+      totalExpense += transaction.amount;
+    }
+  }
+
+  const monthlyIncome = totalIncome;
+  const monthlyExpense = totalExpense;
   const expensesYear = monthlyExpense;
   const balance = totalIncome - totalExpense;
   const assetBalance = getAssetAccountBalance(accounts);
@@ -305,6 +306,21 @@ export async function getFinancialControlData(
     }),
     prisma.account.findMany({
       where: { userId },
+      select: {
+        id: true,
+        type: true,
+        name: true,
+        balance: true,
+        currency: true,
+        creditLimit: true,
+        currentDebt: true,
+        availableCredit: true,
+        minimalPayment: true,
+        paymentDate: true,
+        interestRate: true,
+        createdAt: true,
+        updatedAt: true
+      },
       orderBy: [{ createdAt: "asc" }, { name: "asc" }]
     })
   ]);

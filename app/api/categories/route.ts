@@ -3,18 +3,24 @@ import { NextResponse } from "next/server";
 
 import { badRequest, conflict, readJsonBody } from "@/lib/api";
 import { isAuthError, requireAuth } from "@/lib/auth";
+import { createApiTimer } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { categorySchema, firstZodError } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  const timer = createApiTimer("/api/categories");
+  const authStarted = Date.now();
   const auth = await requireAuth();
+  timer.mark("auth", authStarted);
 
   if (isAuthError(auth)) {
+    timer.done({ status: 401 });
     return auth;
   }
 
+  const dbStarted = Date.now();
   const categories = await prisma.category.findMany({
     where: { userId: auth.userId },
     select: {
@@ -38,6 +44,8 @@ export async function GET() {
       { name: "asc" }
     ]
   });
+  timer.mark("db", dbStarted);
+  timer.done({ count: categories.length });
 
   return NextResponse.json(categories);
 }

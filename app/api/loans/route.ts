@@ -5,6 +5,7 @@ import { badRequest, readJsonBody } from "@/lib/api";
 import { findOwnedAccount } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { getDebtSummary } from "@/lib/debts";
+import { createApiTimer } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { firstZodError, loanSchema } from "@/lib/validation";
 
@@ -136,12 +137,17 @@ function loanErrorResponse(error: unknown) {
 }
 
 export async function GET() {
+  const timer = createApiTimer("/api/loans");
+  const authStarted = Date.now();
   const auth = await requireAuth();
+  timer.mark("auth", authStarted);
 
   if (isAuthError(auth)) {
+    timer.done({ status: 401 });
     return auth;
   }
 
+  const dbStarted = Date.now();
   const loans = await prisma.loan.findMany({
     where: { userId: auth.userId },
     select: loanResponseSelect,
@@ -152,6 +158,7 @@ export async function GET() {
       { createdAt: "desc" }
     ]
   });
+  timer.mark("db", dbStarted);
   const effectiveLoans = loans.map((loan) =>
     loan.debtType === "CREDIT_CARD" && loan.account
       ? {
@@ -165,6 +172,7 @@ export async function GET() {
       : loan
   );
   const summary = getDebtSummary(effectiveLoans);
+  timer.done({ count: loans.length });
 
   return NextResponse.json({ loans: effectiveLoans, summary });
 }

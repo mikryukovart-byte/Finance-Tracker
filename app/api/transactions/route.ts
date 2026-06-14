@@ -5,6 +5,7 @@ import { badRequest, readJsonBody } from "@/lib/api";
 import { applyTransactionEffect, findOwnedAccount } from "@/lib/accounts";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { dateRangeFromSearch } from "@/lib/date-ranges";
+import { createApiTimer } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { firstZodError, transactionSchema } from "@/lib/validation";
 
@@ -52,9 +53,13 @@ const transactionResponseSelect = {
 } satisfies Prisma.TransactionSelect;
 
 export async function GET(request: Request) {
+  const timer = createApiTimer("/api/transactions");
+  const authStarted = Date.now();
   const auth = await requireAuth();
+  timer.mark("auth", authStarted);
 
   if (isAuthError(auth)) {
+    timer.done({ status: 401 });
     return auth;
   }
 
@@ -82,6 +87,7 @@ export async function GET(request: Request) {
     };
   }
 
+  const dbStarted = Date.now();
   const transactions = await prisma.transaction.findMany({
     where,
     select: transactionResponseSelect,
@@ -90,6 +96,8 @@ export async function GET(request: Request) {
         ? [{ amount: sortDir }, { date: "desc" }, { createdAt: "desc" }]
         : [{ date: sortDir }, { createdAt: "desc" }]
   });
+  timer.mark("db", dbStarted);
+  timer.done({ count: transactions.length });
 
   return NextResponse.json(transactions);
 }

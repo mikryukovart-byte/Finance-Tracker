@@ -11,6 +11,7 @@ import {
   buildFinancialControlData,
   parseLeakageThreshold
 } from "@/lib/financial-control";
+import { createApiTimer } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -79,9 +80,13 @@ function buildCategoryBreakdown(transactions: ReportTransaction[], type: "INCOME
 }
 
 export async function GET(request: Request) {
+  const timer = createApiTimer("/api/reports");
+  const authStarted = Date.now();
   const auth = await requireAuth();
+  timer.mark("auth", authStarted);
 
   if (isAuthError(auth)) {
+    timer.done({ status: 401 });
     return auth;
   }
 
@@ -95,33 +100,34 @@ export async function GET(request: Request) {
   const previousPeriodStart = new Date(periodStart.getTime() - periodDuration);
   const previousPeriodEnd = periodStart;
 
-  const allTransactions = await prisma.transaction.findMany({
-    where: {
-      userId: auth.userId,
-      date: {
-        gte: previousPeriodStart,
-        lt: periodEnd
-      }
-    },
-    select: {
-      id: true,
-      amount: true,
-      type: true,
-      date: true,
-      description: true,
-      categoryId: true,
-      createdAt: true,
-      category: {
-        select: {
-          id: true,
-          name: true,
-          type: true
+  const dbStarted = Date.now();
+  const [allTransactions, loans, accounts] = await Promise.all([
+    prisma.transaction.findMany({
+      where: {
+        userId: auth.userId,
+        date: {
+          gte: previousPeriodStart,
+          lt: periodEnd
         }
-      }
-    },
-    orderBy: [{ date: "desc" }, { createdAt: "desc" }]
-  });
-  const [loans, accounts] = await Promise.all([
+      },
+      select: {
+        id: true,
+        amount: true,
+        type: true,
+        date: true,
+        description: true,
+        categoryId: true,
+        createdAt: true,
+        category: {
+          select: {
+            id: true,
+            name: true,
+            type: true
+          }
+        }
+      },
+      orderBy: [{ date: "desc" }, { createdAt: "desc" }]
+    }),
     prisma.loan.findMany({
       where: { userId: auth.userId, status: { not: "CLOSED" } },
       select: {
@@ -152,6 +158,7 @@ export async function GET(request: Request) {
       }
     })
   ]);
+  timer.mark("db", dbStarted);
   const periodTransactions = allTransactions.filter(
     (transaction) => transaction.date >= periodStart && transaction.date < periodEnd
   );
@@ -229,6 +236,7 @@ export async function GET(request: Request) {
     balance: 0
   };
   previousMonth.balance = previousMonth.income - previousMonth.expense;
+  timer.done({ transactions: allTransactions.length });
 
   return NextResponse.json({
     byCategory: byExpenseCategory,

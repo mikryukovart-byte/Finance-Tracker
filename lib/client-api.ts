@@ -11,29 +11,50 @@ let categoriesCache:
 let categoriesRequest: Promise<Category[]> | null = null;
 const jsonCache = new Map<string, { data: unknown; expiresAt: number }>();
 const jsonRequests = new Map<string, Promise<unknown>>();
-let authCheckRequest: Promise<boolean> | null = null;
+let authCheckRequest: Promise<boolean | null> | null = null;
+let authCheckCache:
+  | {
+      authenticated: boolean | null;
+      expiresAt: number;
+    }
+  | null = null;
 
 export async function readErrorMessage(response: Response) {
   const body = await response.json().catch(() => null);
   return body?.message ?? "Не удалось выполнить действие";
 }
 
-async function confirmAuthenticated() {
+export async function confirmClientAuthenticated(options: { force?: boolean } = {}) {
+  const now = Date.now();
+
+  if (!options.force && authCheckCache && authCheckCache.expiresAt > now) {
+    return authCheckCache.authenticated;
+  }
+
   if (!authCheckRequest) {
     authCheckRequest = fetch("/api/auth/me", { cache: "no-store" })
       .then((response) => {
+        const authenticated = response.ok;
+        authCheckCache = {
+          authenticated,
+          expiresAt: Date.now() + (authenticated ? 60_000 : 2_000)
+        };
+
         if (!response.ok) {
           console.warn("[auth] client_auth_check_failed", { status: response.status });
-          return false;
         }
 
-        return true;
+        return authenticated;
       })
       .catch((error) => {
         console.warn("[auth] client_auth_check_error", {
           message: error instanceof Error ? error.message : "unknown"
         });
-        return false;
+        authCheckCache = {
+          authenticated: null,
+          expiresAt: Date.now() + 2_000
+        };
+        return null;
       })
       .finally(() => {
         authCheckRequest = null;
@@ -50,9 +71,9 @@ async function fetchWithAuthRetry(input: RequestInfo | URL, init?: RequestInit) 
     return response;
   }
 
-  const authenticated = await confirmAuthenticated();
+  const authenticated = await confirmClientAuthenticated({ force: true });
 
-  if (!authenticated) {
+  if (authenticated !== true) {
     return response;
   }
 
@@ -149,6 +170,7 @@ export function invalidateFinancialDataCache() {
     "accounts:",
     "advisor:",
     "dashboard:",
+    "goals:",
     "loans:",
     "reports:",
     "transactions:",

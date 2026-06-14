@@ -2,6 +2,7 @@
 
 import { Sidebar } from "@/components/sidebar";
 import { SettingsRuntime } from "@/components/settings-runtime";
+import { confirmClientAuthenticated } from "@/lib/client-api";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef } from "react";
 
@@ -19,22 +20,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
     let cancelled = false;
 
-    fetch("/api/auth/me", { cache: "no-store" })
-      .then((response) => {
-        if (cancelled || response.ok) {
+    confirmClientAuthenticated()
+      .then((authenticated) => {
+        if (cancelled || authenticated !== false) {
           return;
         }
 
-        if (response.status === 401) {
-          console.warn("[auth] app_shell_auth_check_failed", { status: response.status });
-          const next = initialPath === "/" ? "" : `?next=${encodeURIComponent(initialPath)}`;
-          router.replace(`/login${next}`);
-          return;
-        }
-
-        console.warn("[auth] app_shell_auth_check_unexpected_status", {
-          status: response.status
-        });
+        console.warn("[auth] app_shell_auth_check_failed");
+        const next = initialPath === "/" ? "" : `?next=${encodeURIComponent(initialPath)}`;
+        router.replace(`/login${next}`);
       })
       .catch((error) => {
         console.warn("[auth] app_shell_auth_check_error", {

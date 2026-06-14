@@ -67,6 +67,7 @@ model Transaction {
   @@index([userId, type])
   @@index([userId, type, date])
   @@index([userId, accountId])
+  @@index([userId, accountId, date])
   @@index([userId, categoryId, date])
   @@index([categoryId])
 }
@@ -136,4 +137,70 @@ model LoanPayment {
   @@index([userId, date])
   @@index([userId, loanId])
   @@index([loanId, date])
+}
+
+model AnnualGoalPlan {
+  id         String          @id @default(cuid())
+  userId     String
+  year       Int
+  pointA     Float           @default(0)
+  pointAMode String          @default("AUTO")
+  planStartDate DateTime     @default(now())
+  c1Target   Float           @default(0)
+  c2Target   Float           @default(0)
+  c3Target   Float           @default(0)
+  growthMode String          @default("LINEAR")
+  rows       AnnualGoalRow[]
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  @@unique([userId, year])
+  @@index([userId, year])
+}
+
+model AnnualGoalRow {
+  id            String         @id @default(cuid())
+  planId        String
+  plan          AnnualGoalPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  rowKey        String
+  month         Int?
+  c1Value       Float          @default(0)
+  c2Value       Float          @default(0)
+  c3Value       Float          @default(0)
+  kpiText       String?
+  signatureText String?
+  isClosed      Boolean        @default(false)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@unique([planId, rowKey])
+  @@index([planId, month])
+}
+
+model MonthlyTaktLevel {
+  id          String   @id @default(cuid())
+  userId      String
+  year        Int
+  level       Int
+  description String
+  amount      Float    @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, year, level])
+  @@index([userId, year])
+}
+
+model ThreeYearGoalScenario {
+  id        String   @id @default(cuid())
+  userId    String
+  year      Int
+  speed     Float
+  pointC    Float    @default(0)
+  score     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, year, speed])
+  @@index([userId, year])
 }

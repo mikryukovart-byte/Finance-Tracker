@@ -10,7 +10,8 @@ import {
   ListChecks,
   LogOut,
   Scale,
-  Settings
+  Settings,
+  Target
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -24,6 +25,7 @@ const navigation = [
   { href: "/loans", label: "Кредиты", icon: CreditCard },
   { href: "/reports", label: "Отчеты", icon: BarChart3 },
   { href: "/advisor", label: "Советник", icon: Brain },
+  { href: "/goals", label: "Годовые цели", icon: Target },
   { href: "/settings", label: "Настройки", icon: Settings }
 ];
 

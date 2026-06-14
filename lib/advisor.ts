@@ -12,6 +12,7 @@ import {
   getDebtProgress,
   getPlannedDebtPayment
 } from "@/lib/debts";
+import { calculateGoalRowValues, type GoalRowKey } from "@/lib/goals";
 import { prisma } from "@/lib/prisma";
 import type {
   AdvisorAnalysis,
@@ -76,6 +77,28 @@ function compactDescription(value: string | null, fallback = "Без описа�
   }
 
   return `${normalized.slice(0, 77)}...`;
+}
+
+function annualGoalCycleStep(planStartDate: Date, date: Date) {
+  const startMonth = new Date(
+    planStartDate.getFullYear(),
+    planStartDate.getMonth(),
+    1
+  );
+  return Math.max(
+    0,
+    Math.min(
+      12,
+      (date.getFullYear() - startMonth.getFullYear()) * 12 +
+        date.getMonth() -
+        startMonth.getMonth()
+    )
+  );
+}
+
+function annualGoalRowKeyForDate(planStartDate: Date, date: Date): GoalRowKey {
+  const step = annualGoalCycleStep(planStartDate, date);
+  return step === 0 ? "A" : (`B${step}` as GoalRowKey);
 }
 
 function normalizeDescription(value: string | null) {
@@ -339,7 +362,9 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
     loans,
     accounts,
     recentTransfers,
-    monthLoanPayments
+    monthLoanPayments,
+    annualGoalPlan,
+    threeYearGoalScenarios
   ] = await Promise.all([
     prisma.transaction.findMany({
       where: {
@@ -497,6 +522,49 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
         amount: true,
         appliedAmount: true
       }
+    }),
+    prisma.annualGoalPlan.findFirst({
+      where: {
+        userId,
+        planStartDate: {
+          lte: now
+        }
+      },
+      orderBy: { planStartDate: "desc" },
+      select: {
+        year: true,
+        pointA: true,
+        pointAMode: true,
+        planStartDate: true,
+        c1Target: true,
+        c2Target: true,
+        c3Target: true,
+        growthMode: true,
+        rows: {
+          select: {
+            rowKey: true,
+            month: true,
+            c1Value: true,
+            c2Value: true,
+            c3Value: true,
+            kpiText: true,
+            signatureText: true,
+            isClosed: true
+          }
+        }
+      }
+    }),
+    prisma.threeYearGoalScenario.findMany({
+      where: {
+        userId,
+        year: now.getFullYear()
+      },
+      select: {
+        speed: true,
+        pointC: true,
+        score: true
+      },
+      orderBy: { speed: "asc" }
     })
   ]);
 
@@ -653,6 +721,71 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
       ? "часть расходов без категорий"
       : ""
   ].filter(Boolean);
+  const currentGoalRowKey = annualGoalPlan
+    ? annualGoalRowKeyForDate(annualGoalPlan.planStartDate, now)
+    : null;
+  const storedCurrentGoalRow =
+    annualGoalPlan && currentGoalRowKey
+      ? annualGoalPlan.rows.find((row) => row.rowKey === currentGoalRowKey) ?? null
+      : null;
+  const currentGoalValues =
+    annualGoalPlan && currentGoalRowKey
+      ? calculateGoalRowValues({
+          rowKey: currentGoalRowKey,
+          pointA: annualGoalPlan.pointA,
+          c1Target: annualGoalPlan.c1Target,
+          c2Target: annualGoalPlan.c2Target,
+          c3Target: annualGoalPlan.c3Target
+        })
+      : null;
+  const annualGoals = annualGoalPlan
+    ? {
+        year: annualGoalPlan.year,
+        pointA: annualGoalPlan.pointA,
+        pointAMode: annualGoalPlan.pointAMode,
+        planStartDate: annualGoalPlan.planStartDate.toISOString(),
+        growthMode: annualGoalPlan.growthMode,
+        finalTargets: {
+          c1: annualGoalPlan.c1Target,
+          c2: annualGoalPlan.c2Target,
+          c3: annualGoalPlan.c3Target
+        },
+        currentMonth: {
+          month: now.getMonth() + 1,
+          rowKey: currentGoalRowKey,
+          actualIncome: control.monthlyIncome,
+          c1Plan: currentGoalValues?.c1Value ?? null,
+          c2Plan: currentGoalValues?.c2Value ?? null,
+          c3Plan: currentGoalValues?.c3Value ?? null,
+          gapToC1:
+            currentGoalValues?.c1Value !== undefined
+              ? Math.max(0, currentGoalValues.c1Value - control.monthlyIncome)
+              : null,
+          gapToC2:
+            currentGoalValues?.c2Value !== undefined
+              ? Math.max(0, currentGoalValues.c2Value - control.monthlyIncome)
+              : null,
+          gapToC3:
+            currentGoalValues?.c3Value !== undefined
+              ? Math.max(0, currentGoalValues.c3Value - control.monthlyIncome)
+              : null,
+          kpiText: storedCurrentGoalRow?.kpiText ?? null,
+          signatureText: storedCurrentGoalRow?.signatureText ?? null,
+          isClosed: storedCurrentGoalRow?.isClosed ?? false
+        },
+        threeYearScenarios: threeYearGoalScenarios.map((scenario) => {
+          const pointD = scenario.pointC * scenario.speed;
+          return {
+            speed: scenario.speed,
+            pointC: scenario.pointC,
+            pointD,
+            pointE: pointD * scenario.speed,
+            score: scenario.score
+          };
+        }),
+        note: "Годовые цели являются планом и не считаются фактическим доходом."
+      }
+    : null;
 
   return {
     generatedAt: now.toISOString(),
@@ -720,7 +853,8 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
       incomeStatus,
       incomeTransactionCount,
       warnings: dataQualityWarnings
-    }
+    },
+    annualGoals
   };
 }
 
@@ -745,6 +879,7 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
   );
   const biggestExpenseAccount = summary.transactions.expensesByAccount[0];
   const topIncomeSource = summary.transactions.incomeSources[0];
+  const currentAnnualGoal = summary.annualGoals?.currentMonth ?? null;
   const riskyTopCategory =
     biggestExpense && isLifestyleLeakCategory(biggestExpense.name) ? biggestExpense : null;
   const cashflowNegative = summary.totals.monthlyExpense > summary.totals.monthlyIncome;
@@ -807,6 +942,9 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
           : `Доходы за месяц: ${formatRub(summary.totals.monthlyIncome)}, расходы: ${formatRub(summary.totals.monthlyExpense)}.`,
       creditCardDebt > 0
         ? `Долг по кредиткам: ${formatRub(creditCardDebt)}. Доступно по кредиткам: ${formatRub(availableCredit)}, это не ваши деньги.`
+        : "",
+      currentAnnualGoal?.c2Plan
+        ? `Годовая цель C2 на текущий месяц: ${formatRub(currentAnnualGoal.c2Plan)}. Факт: ${formatRub(currentAnnualGoal.actualIncome)}.`
         : ""
     ]),
     mainRisk: clampItems([
@@ -828,6 +966,9 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
       fastestGrowingCategory
         ? `Быстро растет категория «${fastestGrowingCategory.categoryName}»: +${formatRub(fastestGrowingCategory.growth)} за последние 7 дней.`
         : "",
+      currentAnnualGoal?.gapToC2
+        ? `До плана C2 по доходу не хватает ${formatRub(currentAnnualGoal.gapToC2)}. Это цель, не текущие деньги.`
+        : "",
       strictSpendingStop
         ? `Дневной лимит ниже ${formatRub(100)}. Все необязательные расходы нужно остановить.`
         : ""
@@ -840,6 +981,9 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
         ? `Внести платеж по «${overLimitCards[0].name}» минимум на ${formatRub(overLimitCards[0].overLimit)} или зафиксировать дату платежа.`
         : "Проверить все расходы за сегодня и внести пропущенные операции.",
       nextPaymentText ? `Проверить ближайшие платежи: ${nextPaymentText}.` : "",
+      currentAnnualGoal?.kpiText
+        ? `Отработать КП месяца: «${currentAnnualGoal.kpiText}».`
+        : "",
       biggestExpense
         ? `Поставить лимит на «${biggestExpense.name}» до конца дня: не выше ${formatRub(Math.max(0, summary.totals.safeDailyLimit))}.`
         : "",
@@ -1033,6 +1177,7 @@ function buildOpenAiAdvisorContext(summary: AdvisorSummary) {
       "if incomeDataStatus is missing_or_zero or suspiciously_low, say: доход не внесен или неполный",
       "do not calculate debt/income ratios when income data is incomplete",
       "balance adjustments are not income or expense",
+      "annual income goals are targets only, not real income",
       "must use actual categories, accounts and transactions listed in this context",
       "recommend concrete actions with numbers, categories and deadlines"
     ],
@@ -1130,6 +1275,12 @@ function buildOpenAiAdvisorContext(summary: AdvisorSummary) {
       ...summary.dataQuality,
       missingDataMustBeCalledOut: summary.dataQuality.warnings
     },
+    annualIncomeGoals: summary.annualGoals
+      ? {
+          ...summary.annualGoals,
+          warning: "Goals are targets only. They are not real income and must not improve cash flow calculations."
+        }
+      : null,
     spendingLimit: {
       safeDailySpendingLimit: Math.max(0, summary.totals.safeDailyLimit),
       daysLeftInMonth: summary.totals.daysLeftInMonth,
@@ -1172,6 +1323,7 @@ async function callOpenAi(summary: AdvisorSummary): Promise<AdvisorAnalysis> {
             "Запрещены общие фразы без чисел: «save more», «spend less», «track expenses», «экономьте больше», «тратьте меньше», «ведите учет».",
             "Если доход за месяц 0, отсутствует или помечен как suspiciously_low, напиши точно: «доход не внесен или неполный». Не дели долг на такой доход и не пиши абсурдные коэффициенты.",
             "Не считай корректировки баланса доходом или расходом.",
+            "Годовые цели дохода — это план, а не факт. Не улучшай cash flow и баланс на основе целей.",
             "Верни только валидный JSON без markdown."
           ].join("\n")
         },
@@ -1204,6 +1356,7 @@ async function callOpenAi(summary: AdvisorSummary): Promise<AdvisorAnalysis> {
             "- Не называй availableCredit деньгами, остатком пользователя или резервом.",
             "- Если есть превышение лимита кредитки, это главный приоритет долга.",
             "- Если incomeDataStatus не present, скажи «доход не внесен или неполный» и не рассчитывай проценты/разы к доходу.",
+            "- Если annualIncomeGoals есть, используй gap и KPI как план действий, но не как фактический доход.",
             "- Если safeDailySpendingLimit ниже 100 ₽, запрети все необязательные расходы.",
             "- Если топ категории включают кафе, кофе, алкоголь, фастфуд или развлечения — назови это прямо.",
             "- Если realMoneyOnAccounts ниже 1000 ₽, не предлагай мелкую оптимизацию как главный план; приоритет — ближайший денежный вход и обязательные платежи.",

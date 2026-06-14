@@ -19,7 +19,7 @@ type SupabaseSession = {
   };
 };
 
-const authCacheTtlMs = 30_000;
+const authCacheTtlMs = 5 * 60_000;
 const authUserCache = new Map<
   string,
   {
@@ -287,6 +287,13 @@ export function setAuthCookies(response: NextResponse, session: SupabaseSession)
   if (session.refresh_token) {
     response.cookies.set(refreshTokenCookie, session.refresh_token, {
       ...getAuthCookieOptions(60 * 60 * 24 * 30)
+    });
+  }
+
+  if (session.user?.id) {
+    cacheAuthUser(session.access_token, {
+      userId: session.user.id,
+      email: session.user.email ?? null
     });
   }
 }
