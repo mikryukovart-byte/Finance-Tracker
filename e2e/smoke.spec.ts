@@ -2,14 +2,16 @@ import { expect, type Page, test } from "@playwright/test";
 
 const appPages = [
   { path: "/", title: "Главная" },
-  { path: "/truth", title: "Правда" },
-  { path: "/accounts", title: "Счета" },
   { path: "/operations", title: "Операции" },
-  { path: "/categories", title: "Категории" },
-  { path: "/loans", title: "Кредиты" },
-  { path: "/reports", title: "Отчеты" },
+  { path: "/wallet", title: "Кошелёк" },
+  { path: "/strategy", title: "Стратегия" },
+  { path: "/strategy/goals", title: "Цели" },
+  { path: "/strategy/year", title: "План года" },
+  { path: "/strategy/three-year", title: "План 3-2-1" },
+  { path: "/strategy/actions", title: "Неделя" },
+  { path: "/strategy/actions/history", title: "Дневник действий" },
+  { path: "/analytics", title: "Аналитика" },
   { path: "/advisor", title: "Советник" },
-  { path: "/goals", title: "Годовые цели" },
   { path: "/settings", title: "Настройки" }
 ];
 
@@ -57,7 +59,7 @@ test.describe("smoke", () => {
   });
 
   test("updates annual goal start date without timezone shift", async ({ page }) => {
-    await openAppPage(page, "/goals", "Годовые цели");
+    await openAppPage(page, "/strategy/goals", "Цели");
 
     const settingsForm = page.locator("form").filter({ hasText: "Настройки плана" });
 
@@ -83,10 +85,61 @@ test.describe("smoke", () => {
     expect(saveResponse.ok()).toBeTruthy();
     await expect(saveButton).toBeEnabled();
     await expect(settingsForm.getByLabel("Дата старта плана")).toHaveValue("2026-07-01");
+
+    await openAppPage(page, "/strategy/year", "План года");
     await expect(page.getByText("Июль 2026").first()).toBeVisible();
     await expect(page.getByText("Август 2026").first()).toBeVisible();
     await expect(page.locator("body")).not.toContainText("30.06.2026");
+
+    await openAppPage(page, "/strategy/actions", "Неделя");
+    await expect(page.getByText("План ещё не начался").first()).toBeVisible();
+    await expect(page.getByText(/Текущая неделя:/)).not.toBeVisible();
+    await expect(page.getByText("Разрыв недели", { exact: true })).not.toBeVisible();
+    await expect(page.getByText("Разрыв месяца", { exact: true })).not.toBeVisible();
     await expectAuthenticatedApp(page);
     await expectNoFatalError(page);
+  });
+
+  test("opens daily actions history and supports soft delete", async ({ page }) => {
+    await openAppPage(page, "/strategy/actions/history", "Дневник действий");
+
+    const marker = `E2E daily action ${Date.now()}`;
+    const createResponse = await page.request.post("/api/daily-actions", {
+      data: {
+        date: "2026-06-17",
+        type: "FIRST_TOUCH",
+        target: marker,
+        value: "E2E проверка ценности действия",
+        nextStep: "E2E следующий шаг"
+      }
+    });
+    expect(createResponse.ok()).toBeTruthy();
+    const created = await createResponse.json();
+
+    await page.goto("/strategy/actions/history");
+    await page.getByPlaceholder("Кому, ценность, следующий шаг...").fill(marker);
+    await page.getByRole("button", { name: "Найти" }).click();
+    await expect(page.getByText(marker)).toBeVisible();
+
+    const deleteResponse = await page.request.delete(`/api/daily-actions/${created.id}`);
+    expect(deleteResponse.ok()).toBeTruthy();
+
+    await page.goto("/strategy/actions/history");
+    await page.getByPlaceholder("Кому, ценность, следующий шаг...").fill(marker);
+    await page.getByRole("button", { name: "Найти" }).click();
+    await expect(page.getByText(marker)).not.toBeVisible();
+
+    await page.getByLabel("Показать удалённые").check();
+    await page.getByRole("button", { name: "Найти" }).click();
+    await expect(page.getByText(marker)).toBeVisible();
+    await expect(page.getByText("Удалено")).toBeVisible();
+
+    const restoreResponse = await page.request.patch(`/api/daily-actions/${created.id}`, {
+      data: { restore: true }
+    });
+    expect(restoreResponse.ok()).toBeTruthy();
+
+    const cleanupResponse = await page.request.delete(`/api/daily-actions/${created.id}`);
+    expect(cleanupResponse.ok()).toBeTruthy();
   });
 });

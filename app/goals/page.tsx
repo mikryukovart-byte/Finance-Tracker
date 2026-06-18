@@ -1,5 +1,5 @@
-import { GoalsClient } from "@/components/goals-client";
+import { redirect } from "next/navigation";
 
 export default function GoalsPage() {
-  return <GoalsClient />;
+  redirect("/strategy/year");
 }

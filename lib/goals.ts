@@ -223,6 +223,11 @@ function todayToUtcNoon(value = new Date()) {
   return partsToUtcNoon(localDateOnlyParts(value));
 }
 
+function dateOnlyToLocalStart(value: Date | string) {
+  const parts = dateOnlyParts(value);
+  return new Date(parts.year, parts.month - 1, parts.day);
+}
+
 export function normalizeGoalYear(value: string | number | null | undefined) {
   const parsed = Number(value);
   const currentYear = new Date().getFullYear();
@@ -604,35 +609,79 @@ function rowLabel(row: HydratedGoalRow) {
   return `${row.rowKey} · ${String(row.calendarMonth).padStart(2, "0")}.${row.calendarYear}`;
 }
 
-function currentCycleRow(rows: HydratedGoalRow[], now = new Date()) {
+function localMonthRange(row: HydratedGoalRow) {
+  const calendarMonth = row.calendarMonth ?? 1;
+  const calendarYear = row.calendarYear ?? new Date().getFullYear();
+  const start = new Date(calendarYear, calendarMonth - 1, 1);
+
+  return {
+    start,
+    end: new Date(calendarYear, calendarMonth, 1)
+  };
+}
+
+function minDate(first: Date, second: Date) {
+  return first.getTime() <= second.getTime() ? first : second;
+}
+
+function maxDate(first: Date, second: Date) {
+  return first.getTime() >= second.getTime() ? first : second;
+}
+
+function currentCycleState(
+  rows: HydratedGoalRow[],
+  planStartDateValue: Date | string,
+  now = new Date()
+) {
   const rowsWithDates = rows.filter((row) => row.calendarMonth && row.calendarYear);
 
   if (!rowsWithDates.length) {
-    return rows[0] ?? null;
+    return {
+      status: "ACTIVE" as const,
+      row: rows[0] ?? null,
+      nextRow: rows[1] ?? null
+    };
   }
 
-  const currentMonthKey = now.getFullYear() * 12 + now.getMonth();
-  const current = rowsWithDates.find((row) => {
-    const rowMonthKey = (row.calendarYear ?? 0) * 12 + (row.calendarMonth ?? 1) - 1;
-    return rowMonthKey === currentMonthKey;
-  });
-
-  if (current) {
-    return current;
-  }
-
+  const today = todayToUtcNoon(now);
+  const planStartDate = dateOnlyToUtcNoon(planStartDateValue);
   const first = rowsWithDates[0];
-  const firstMonthKey =
-    (first.calendarYear ?? 0) * 12 + (first.calendarMonth ?? 1) - 1;
 
-  return currentMonthKey < firstMonthKey ? first : rowsWithDates[rowsWithDates.length - 1];
+  if (today.getTime() < planStartDate.getTime()) {
+    return {
+      status: "NOT_STARTED" as const,
+      row: null,
+      nextRow: first
+    };
+  }
+
+  const startMonthKey = planStartDate.getUTCFullYear() * 12 + planStartDate.getUTCMonth();
+  const currentMonthKey = today.getUTCFullYear() * 12 + today.getUTCMonth();
+  const offset = Math.max(0, currentMonthKey - startMonthKey);
+  const activeRowKey = offset === 0 ? "A" : `B${Math.min(offset, 12)}`;
+  const row =
+    rowsWithDates.find((item) => item.rowKey === activeRowKey) ??
+    rowsWithDates[rowsWithDates.length - 1] ??
+    null;
+  const rowIndex = row ? rowsWithDates.findIndex((item) => item.id === row.id) : -1;
+
+  return {
+    status: offset > 12 ? ("FINISHED" as const) : ("ACTIVE" as const),
+    row,
+    nextRow: rowIndex >= 0 ? rowsWithDates[rowIndex + 1] ?? null : null
+  };
 }
 
-async function getWeeklyIncomeFacts(userId: string, now = new Date()) {
-  const weekStart = startOfWeek(now);
-  const weekEnd = endOfWeek(now);
-  const monthStart = startOfMonth(now);
-  const monthEnd = endOfMonth(now);
+async function getWeeklyIncomeFacts(
+  userId: string,
+  ranges: {
+    weekStart: Date;
+    weekEnd: Date;
+    monthStart: Date;
+    monthEnd: Date;
+  }
+) {
+  const { weekStart, weekEnd, monthStart, monthEnd } = ranges;
   const [result] = await prisma.$queryRaw<
     Array<{ "weeklyIncome": number | string | null; "monthlyIncome": number | string | null }>
   >`
@@ -646,8 +695,8 @@ async function getWeeklyIncomeFacts(userId: string, now = new Date()) {
     FROM "Transaction"
     WHERE "userId" = ${userId}
       AND "type" = 'INCOME'
-      AND "date" >= ${weekStart < monthStart ? weekStart : monthStart}
-      AND "date" < ${weekEnd > monthEnd ? weekEnd : monthEnd}
+      AND "date" >= ${minDate(weekStart, monthStart)}
+      AND "date" < ${maxDate(weekEnd, monthEnd)}
   `;
 
   return {
@@ -662,16 +711,71 @@ async function getWeeklyIncomeFacts(userId: string, now = new Date()) {
 
 async function buildWeeklyTakt(userId: string, plan: SelectedGoalPlan): Promise<WeeklyTakt> {
   const now = new Date();
-  const row = currentCycleRow(plan.rows as HydratedGoalRow[], now);
-  const monthlyTarget = row?.c2Value ?? 0;
+  const cycle = currentCycleState(plan.rows as HydratedGoalRow[], plan.planStartDate, now);
+  const row = cycle.row;
+  const previewRow = row ?? cycle.nextRow;
+  const monthlyTarget = previewRow?.c2Value ?? 0;
   const weeklyTarget = monthlyTarget / 4;
   const dailyTarget = weeklyTarget / 5;
-  const facts = await getWeeklyIncomeFacts(userId, now);
+  const planStartDate = dateOnlyToUtcNoon(plan.planStartDate);
+
+  if (cycle.status === "NOT_STARTED") {
+    return {
+      status: cycle.status,
+      selectedScenario: "C2",
+      rowKey: null,
+      rowLabel: "—",
+      nextRowKey: cycle.nextRow?.rowKey ?? null,
+      nextRowLabel: cycle.nextRow ? rowLabel(cycle.nextRow) : null,
+      planStartDate: planStartDate.toISOString(),
+      monthlyTarget,
+      weeklyTarget,
+      dailyTarget,
+      weeklyIncome: 0,
+      monthlyIncome: 0,
+      weeklyGap: 0,
+      monthlyGap: 0,
+      weekStartDate: "",
+      weekEndDate: "",
+      monthStartDate: cycle.nextRow?.periodStart?.toISOString() ?? "",
+      monthEndDate: cycle.nextRow?.periodEnd
+        ? new Date(cycle.nextRow.periodEnd.getTime() - 1).toISOString()
+        : ""
+    };
+  }
+
+  const monthRange = row ? localMonthRange(row) : { start: startOfMonth(now), end: endOfMonth(now) };
+  const activePeriodStart =
+    row?.rowKey === "A"
+      ? maxDate(dateOnlyToLocalStart(plan.planStartDate), monthRange.start)
+      : monthRange.start;
+  const weekStart = maxDate(startOfWeek(now), activePeriodStart);
+  const weekEnd = minDate(endOfWeek(now), monthRange.end);
+  const facts =
+    weekStart.getTime() < weekEnd.getTime()
+      ? await getWeeklyIncomeFacts(userId, {
+          weekStart,
+          weekEnd,
+          monthStart: monthRange.start,
+          monthEnd: monthRange.end
+        })
+      : {
+          weeklyIncome: 0,
+          monthlyIncome: 0,
+          weekStart,
+          weekEnd,
+          monthStart: monthRange.start,
+          monthEnd: monthRange.end
+        };
 
   return {
+    status: cycle.status,
     selectedScenario: "C2",
     rowKey: row?.rowKey ?? null,
     rowLabel: row ? rowLabel(row) : "—",
+    nextRowKey: cycle.nextRow?.rowKey ?? null,
+    nextRowLabel: cycle.nextRow ? rowLabel(cycle.nextRow) : null,
+    planStartDate: planStartDate.toISOString(),
     monthlyTarget,
     weeklyTarget,
     dailyTarget,

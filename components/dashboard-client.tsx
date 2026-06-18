@@ -404,7 +404,7 @@ export function DashboardClient() {
           <div>
             <div className="mb-2 flex items-center justify-between gap-3">
               <span className="field-label">Категория</span>
-              <Link href="/categories" className="text-sm font-medium text-accent hover:underline">
+              <Link href="/settings" className="text-sm font-medium text-accent hover:underline">
                 Управлять
               </Link>
             </div>
@@ -440,7 +440,7 @@ export function DashboardClient() {
               <label className="field-label" htmlFor="quickAccount">
                 Счет
               </label>
-              <Link href="/accounts" className="text-sm font-medium text-accent hover:underline">
+              <Link href="/wallet" className="text-sm font-medium text-accent hover:underline">
                 Управлять
               </Link>
             </div>
@@ -568,7 +568,7 @@ export function DashboardClient() {
             <section className="mt-6 card p-4 sm:p-5">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <h2 className="text-lg font-semibold text-ink">Счета</h2>
-                <Link href="/accounts" className="text-sm font-medium text-accent hover:underline">
+                <Link href="/wallet" className="text-sm font-medium text-accent hover:underline">
                   Управлять
                 </Link>
               </div>

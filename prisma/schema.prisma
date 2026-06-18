@@ -233,3 +233,24 @@ model WeeklyHypothesis {
   @@index([userId, weekStartDate])
   @@index([userId, status])
 }
+
+model DailyActionLog {
+  id            String   @id @default(cuid())
+  userId        String
+  date          DateTime
+  weekStartDate DateTime
+  type          String
+  target        String?
+  value         String?
+  nextStep      String?
+  note          String?
+  deletedAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId, date])
+  @@index([userId, weekStartDate])
+  @@index([userId, type])
+  @@index([userId, deletedAt])
+  @@index([userId, date, deletedAt])
+}

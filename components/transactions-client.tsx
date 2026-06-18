@@ -729,7 +729,7 @@ export function TransactionsClient() {
                 <label className="field-label" htmlFor="categoryId">
                   Категория
                 </label>
-                <Link href="/categories" className="text-sm font-medium text-accent hover:underline">
+                <Link href="/settings" className="text-sm font-medium text-accent hover:underline">
                   Создать
                 </Link>
               </div>
@@ -767,8 +767,8 @@ export function TransactionsClient() {
                 <label className="field-label" htmlFor="accountId">
                   Счет
                 </label>
-                <Link href="/accounts" className="text-sm font-medium text-accent hover:underline">
-                  Счета
+                <Link href="/wallet" className="text-sm font-medium text-accent hover:underline">
+                  Кошелёк
                 </Link>
               </div>
               {accounts.length === 0 && !accountsLoading ? (

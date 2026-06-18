@@ -265,6 +265,7 @@ export type AdvisorAnalysis = {
   shortConclusion: string[];
   mainRisk: string[];
   todayActions: string[];
+  weeklyExecution: string[];
   dontDo: string[];
   debtPriority: string[];
   spendingLimit: string[];
@@ -420,6 +421,35 @@ export type AdvisorSummary = {
     | "warnings"
   > | null;
   weeklyTakt: WeeklyTakt | null;
+  weeklyExecution: {
+    weekStartDate: string;
+    weekEndDate: string;
+    hypothesisCount: number;
+    actionCount: number;
+    actionCounts: {
+      firstTouches: number;
+      followUps: number;
+      warmContacts: number;
+      calls: number;
+      proposals: number;
+      priceNamed: number;
+      other: number;
+    };
+    recentActions: Array<{
+      date: string;
+      type: DailyActionType;
+      target: string | null;
+      value: string | null;
+      nextStep: string | null;
+    }>;
+    hypotheses: Array<{
+      title: string;
+      actionPlan: string;
+      expectedResult: string | null;
+      actualResult: string | null;
+      status: WeeklyHypothesisStatus;
+    }>;
+  };
   weeklyHypotheses: WeeklyHypothesis[];
   annualGoals: {
     year: number;
@@ -533,9 +563,13 @@ export type AnnualIncomeFact = {
 };
 
 export type WeeklyTakt = {
+  status: "NOT_STARTED" | "ACTIVE" | "FINISHED";
   selectedScenario: GoalScenarioKey;
   rowKey: string | null;
   rowLabel: string;
+  nextRowKey: string | null;
+  nextRowLabel: string | null;
+  planStartDate: string;
   monthlyTarget: number;
   weeklyTarget: number;
   dailyTarget: number;
@@ -568,6 +602,30 @@ export type WeeklyHypothesis = {
   actualResult: string | null;
   conclusion: string | null;
   status: WeeklyHypothesisStatus;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type DailyActionType =
+  | "FIRST_TOUCH"
+  | "FOLLOW_UP"
+  | "WARM_CONTACT"
+  | "CALL"
+  | "PROPOSAL"
+  | "PRICE_NAMED"
+  | "OTHER";
+
+export type DailyActionLog = {
+  id: string;
+  userId?: string;
+  date: string;
+  weekStartDate: string;
+  type: DailyActionType;
+  target: string | null;
+  value: string | null;
+  nextStep: string | null;
+  note: string | null;
+  deletedAt: string | null;
   createdAt?: string;
   updatedAt?: string;
 };

@@ -128,7 +128,7 @@ export function ReportsClient() {
       <PeriodFilter value={period} onChange={setPeriod} />
 
       <Link
-        href="/goals"
+        href="/strategy"
         className="mb-4 mt-2 flex items-center justify-between rounded-md border border-line bg-paper px-4 py-3 text-sm text-ink transition hover:bg-soft"
       >
         <span>

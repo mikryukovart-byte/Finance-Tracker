@@ -8,8 +8,11 @@ import {
   Target,
   TrendingUp
 } from "lucide-react";
+import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 
+import { DailyActions } from "@/components/daily-actions";
 import { Notice } from "@/components/notice";
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
@@ -28,6 +31,12 @@ import type {
   MonthlyTaktLevel,
   ThreeYearGoalScenario
 } from "@/types/finance";
+
+type StrategyView = "hub" | "goals" | "year" | "three-year" | "actions";
+
+type GoalsClientProps = {
+  view?: StrategyView;
+};
 
 const monthNames = [
   "Январь",
@@ -79,6 +88,35 @@ function dateInputValue(value: string | null | undefined) {
   const dateOnlyMatch = /^(\d{4}-\d{2}-\d{2})/.exec(value);
 
   return dateOnlyMatch?.[1] ?? "";
+}
+
+function parseDateOnlyLocal(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatPlanMonth(value: string | null | undefined) {
+  const date = parseDateOnlyLocal(dateInputValue(value));
+
+  if (!date) {
+    return "—";
+  }
+
+  return `${monthNames[date.getMonth()]} ${date.getFullYear()}`;
 }
 
 function formatCurrencyInline(value: number) {
@@ -149,7 +187,38 @@ function monthStatus(row: AnnualGoalRow, actual: number) {
   return "Ниже C1";
 }
 
-function findCurrentCycleState(rows: AnnualGoalRow[], now: Date) {
+function StrategyNavCard({
+  href,
+  title,
+  description,
+  children
+}: {
+  href: string;
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      className="card block p-4 transition hover:border-line hover:bg-soft/50 focus:outline-none focus:ring-2 focus:ring-line sm:p-5"
+    >
+      <div className="flex min-h-full flex-col gap-4">
+        <div>
+          <h2 className="text-lg font-semibold text-ink">{title}</h2>
+          <p className="mt-1 text-sm text-muted">{description}</p>
+        </div>
+        <div className="mt-auto grid gap-2 text-sm">{children}</div>
+      </div>
+    </Link>
+  );
+}
+
+function findCurrentCycleState(
+  rows: AnnualGoalRow[],
+  now: Date,
+  planStartDateValue?: string
+) {
   const rowsWithDates = rows.filter((row) => row.calendarMonth && row.calendarYear);
 
   if (!rowsWithDates.length) {
@@ -161,7 +230,19 @@ function findCurrentCycleState(rows: AnnualGoalRow[], now: Date) {
     };
   }
 
-  const currentMonthKey = now.getFullYear() * 12 + now.getMonth();
+  const planStartDate = parseDateOnlyLocal(dateInputValue(planStartDateValue));
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const first = rowsWithDates[0];
+
+  if (planStartDate && today.getTime() < planStartDate.getTime()) {
+    return {
+      selectedRow: null,
+      nextRow: first,
+      isBeforeStart: true
+    };
+  }
+
+  const currentMonthKey = today.getFullYear() * 12 + today.getMonth();
   const current = rowsWithDates.find((row) => {
     const rowMonthKey = (row.calendarYear ?? 0) * 12 + (row.calendarMonth ?? 1) - 1;
     return rowMonthKey === currentMonthKey;
@@ -176,14 +257,13 @@ function findCurrentCycleState(rows: AnnualGoalRow[], now: Date) {
     };
   }
 
-  const first = rowsWithDates[0];
   const last = rowsWithDates[rowsWithDates.length - 1];
   const firstMonthKey =
     (first.calendarYear ?? 0) * 12 + (first.calendarMonth ?? 1) - 1;
 
   if (currentMonthKey < firstMonthKey) {
     return {
-      selectedRow: first,
+      selectedRow: null,
       nextRow: first,
       isBeforeStart: true
     };
@@ -196,7 +276,7 @@ function findCurrentCycleState(rows: AnnualGoalRow[], now: Date) {
   };
 }
 
-export function GoalsClient() {
+export function GoalsClient({ view = "hub" }: GoalsClientProps) {
   const now = new Date();
   const currentYear = now.getFullYear();
   const [year, setYear] = useState(currentYear);
@@ -278,23 +358,30 @@ export function GoalsClient() {
     }
     return map;
   }, [data]);
-  const cycleState = findCurrentCycleState(rows, now);
+  const cycleState = findCurrentCycleState(rows, now, data?.plan.planStartDate);
   const selectedRow = cycleState.selectedRow;
+  const summaryRow = selectedRow ?? cycleState.nextRow;
   const selectedActual = selectedRow ? factsByRowKey.get(selectedRow.rowKey) ?? 0 : 0;
-  const selectedC1 = selectedRow?.c1Value ?? 0;
-  const selectedC2 = selectedRow?.c2Value ?? 0;
-  const selectedC3 = selectedRow?.c3Value ?? 0;
-  const gapToC2 = Math.max(0, selectedC2 - selectedActual);
+  const selectedC1 = summaryRow?.c1Value ?? 0;
+  const selectedC2 = summaryRow?.c2Value ?? 0;
+  const selectedC3 = summaryRow?.c3Value ?? 0;
+  const gapToC2 = selectedRow ? Math.max(0, selectedC2 - selectedActual) : 0;
   const selectedRowLabel = selectedRow ? rowLabel(selectedRow) : "—";
+  const summaryRowLabel = summaryRow ? rowLabel(summaryRow) : "—";
   const nextRowLabel = cycleState.nextRow ? rowLabel(cycleState.nextRow) : null;
-  const weeklyRow = data?.weeklyTakt?.rowKey
-    ? rows.find((row) => row.rowKey === data.weeklyTakt.rowKey) ?? selectedRow
-    : selectedRow;
+  const weeklyTakt = data?.weeklyTakt;
+  const weeklyRow =
+    weeklyTakt?.rowKey
+      ? rows.find((row) => row.rowKey === weeklyTakt.rowKey) ?? selectedRow
+      : weeklyTakt?.nextRowKey
+        ? rows.find((row) => row.rowKey === weeklyTakt.nextRowKey) ?? cycleState.nextRow
+        : selectedRow;
+  const isWeeklyNotStarted = weeklyTakt?.status === "NOT_STARTED";
   const weeklyMonthlyTarget = scenarioValue(weeklyRow, weeklyScenario);
   const weeklyTarget = weeklyMonthlyTarget / 4;
   const weeklyDailyTarget = weeklyTarget / 5;
-  const weeklyIncome = data?.weeklyTakt.weeklyIncome ?? 0;
-  const weeklyMonthIncome = data?.weeklyTakt.monthlyIncome ?? 0;
+  const weeklyIncome = weeklyTakt?.weeklyIncome ?? 0;
+  const weeklyMonthIncome = weeklyTakt?.monthlyIncome ?? 0;
   const weeklyGap = Math.max(0, weeklyTarget - weeklyIncome);
   const weeklyMonthGap = Math.max(0, weeklyMonthlyTarget - weeklyMonthIncome);
   const effectivePointA =
@@ -308,6 +395,36 @@ export function GoalsClient() {
       .filter((target) => target.value <= effectivePointA)
       .map((target) => target.name);
   }, [effectivePointA, settings.c1Target, settings.c2Target, settings.c3Target]);
+  const pageMeta = {
+    hub: {
+      title: "Стратегия",
+      description: "Цели, план дохода и недельные действия."
+    },
+    goals: {
+      title: "Цели",
+      description: "Точка А, дата старта и цели C1/C2/C3."
+    },
+    year: {
+      title: "План года",
+      description: "Месячный путь A → B10, факт, КП и статус."
+    },
+    "three-year": {
+      title: "План 3-2-1",
+      description: "Сценарии роста на 1, 2 и 3 года."
+    },
+    actions: {
+      title: "Неделя",
+      description: "Недельный такт, гипотезы и действия."
+    }
+  } satisfies Record<StrategyView, { title: string; description: string }>;
+  const showGoalSetup = view === "goals";
+  const showYearPlan = view === "year";
+  const showThreeYearPlan = view === "three-year";
+  const showWeeklyActions = view === "actions";
+  const showHub = view === "hub";
+  const primaryThreeYearScenario = data?.threeYearScenarios.find(
+    (scenario) => scenario.speed === 2
+  ) ?? data?.threeYearScenarios[0] ?? null;
 
   function cacheGoals(next: GoalsResponse) {
     setData(next);
@@ -510,9 +627,15 @@ export function GoalsClient() {
   return (
     <div>
       <PageHeader
-        title="Годовые цели"
-        description="План роста дохода по месяцам."
+        title={pageMeta[view].title}
+        description={pageMeta[view].description}
       />
+
+      {view !== "hub" ? (
+        <Link href="/strategy" className="mb-5 inline-flex text-sm text-muted transition hover:text-ink">
+          ← Стратегия
+        </Link>
+      ) : null}
 
       <Notice message={message} tone={tone} />
 
@@ -527,6 +650,127 @@ export function GoalsClient() {
         </div>
       ) : data ? (
         <div className="space-y-6">
+          {showHub ? (
+            <>
+              <section className="card p-4 sm:p-5">
+                <div className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-5">
+                  <div>
+                    <p className="text-muted">Дата старта</p>
+                    <p className="mt-1 font-medium text-ink">
+                      {formatPlanMonth(data.plan.planStartDate)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted">Статус</p>
+                    <p className="mt-1 font-medium text-ink">
+                      {cycleState.isBeforeStart ? "План ещё не начался" : selectedRowLabel}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted">Точка А</p>
+                    <p className="mt-1 font-medium text-ink">
+                      {formatCurrencyInline(data.plan.pointA)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted">Цель</p>
+                    <p className="mt-1 font-medium text-ink">
+                      {summaryRowLabel}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted">Сценарий</p>
+                    <p className="mt-1 font-medium text-ink">
+                      {weeklyTakt?.selectedScenario ?? weeklyScenario}
+                    </p>
+                  </div>
+                </div>
+              </section>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <StrategyNavCard
+                  href="/strategy/goals"
+                  title="Цели"
+                  description="Точка А, дата старта, цели C1/C2/C3."
+                >
+                  <div className="flex justify-between gap-3">
+                    <span className="text-muted">A</span>
+                    <span className="font-medium text-ink">{formatCurrencyInline(data.plan.pointA)}</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-xs text-muted">
+                    <span>C1 {formatCurrencyInline(data.plan.c1Target)}</span>
+                    <span>C2 {formatCurrencyInline(data.plan.c2Target)}</span>
+                    <span>C3 {formatCurrencyInline(data.plan.c3Target)}</span>
+                  </div>
+                </StrategyNavCard>
+
+                <StrategyNavCard
+                  href="/strategy/year"
+                  title="План года"
+                  description="Месячный путь A → B10, факт, КП и статус."
+                >
+                  <div className="flex justify-between gap-3">
+                    <span className="text-muted">
+                      {cycleState.isBeforeStart ? "Следующая цель" : "Текущий / следующий"}
+                    </span>
+                    <span className="font-medium text-ink">
+                      {cycleState.isBeforeStart
+                        ? nextRowLabel ?? "—"
+                        : `${selectedRowLabel}${nextRowLabel ? ` → ${nextRowLabel}` : ""}`}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-muted">Факт / C2</span>
+                    <span className="font-medium text-ink">
+                      {formatCurrencyInline(selectedActual)} / {formatCurrencyInline(selectedC2)}
+                    </span>
+                  </div>
+                </StrategyNavCard>
+
+                <StrategyNavCard
+                  href="/strategy/three-year"
+                  title="План 3-2-1"
+                  description="Сценарии роста на 1, 2 и 3 года."
+                >
+                  {primaryThreeYearScenario ? (
+                    <>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-muted">C</span>
+                        <span className="font-medium text-ink">
+                          {formatCurrencyInline(primaryThreeYearScenario.pointC)}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-xs text-muted">
+                        <span>D {formatCurrencyInline(primaryThreeYearScenario.pointD)}</span>
+                        <span>E {formatCurrencyInline(primaryThreeYearScenario.pointE)}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <span className="text-muted">Сценарии пока не заполнены</span>
+                  )}
+                </StrategyNavCard>
+
+                <StrategyNavCard
+                  href="/strategy/actions"
+                  title="Неделя"
+                  description="Недельный такт, гипотезы и действия."
+                >
+                  <div className="flex justify-between gap-3">
+                    <span className="text-muted">Статус</span>
+                    <span className="font-medium text-ink">
+                      {isWeeklyNotStarted ? "План ещё не начался" : weeklyRow ? rowLabel(weeklyRow) : "—"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-muted">Цель недели</span>
+                    <span className="font-medium text-ink">{formatCurrencyInline(weeklyTarget)}</span>
+                  </div>
+                </StrategyNavCard>
+              </div>
+            </>
+          ) : null}
+
+          {showGoalSetup ? (
           <form className="card p-4 sm:p-5" onSubmit={saveSettings}>
             <div>
               <h2 className="text-lg font-semibold text-ink">Настройки плана</h2>
@@ -692,9 +936,12 @@ export function GoalsClient() {
               </p>
             ) : null}
           </form>
+          ) : null}
 
           {loading ? <p className="text-sm text-muted">Обновляем данные…</p> : null}
 
+          {showGoalSetup ? (
+          <>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
             <StatCard
               label="Точка А"
@@ -709,20 +956,20 @@ export function GoalsClient() {
               label="Факт"
               value={formatCurrencyInline(selectedActual)}
               icon={CalendarDays}
-              description={selectedRowLabel}
+              description={selectedRow ? selectedRowLabel : "план не начался"}
               tone={selectedActual >= selectedC1 && selectedC1 > 0 ? "income" : "neutral"}
               showIcon={false}
               valueNoWrap
               valueSize="compact"
             />
-            <StatCard label="План C1" value={formatCurrencyInline(selectedC1)} icon={TrendingUp} description={selectedRow?.rowKey ?? "—"} showIcon={false} valueNoWrap valueSize="compact" />
-            <StatCard label="План C2" value={formatCurrencyInline(selectedC2)} icon={TrendingUp} description={selectedRow?.rowKey ?? "—"} showIcon={false} valueNoWrap valueSize="compact" />
-            <StatCard label="План C3" value={formatCurrencyInline(selectedC3)} icon={TrendingUp} description={selectedRow?.rowKey ?? "—"} showIcon={false} valueNoWrap valueSize="compact" />
+            <StatCard label="План C1" value={formatCurrencyInline(selectedC1)} icon={TrendingUp} description={summaryRow?.rowKey ?? "—"} showIcon={false} valueNoWrap valueSize="compact" />
+            <StatCard label="План C2" value={formatCurrencyInline(selectedC2)} icon={TrendingUp} description={summaryRow?.rowKey ?? "—"} showIcon={false} valueNoWrap valueSize="compact" />
+            <StatCard label="План C3" value={formatCurrencyInline(selectedC3)} icon={TrendingUp} description={summaryRow?.rowKey ?? "—"} showIcon={false} valueNoWrap valueSize="compact" />
             <StatCard
               label="Разрыв до C2"
               value={formatCurrencyInline(gapToC2)}
               icon={Sigma}
-              description={selectedRowLabel}
+              description={selectedRow ? selectedRowLabel : "после старта"}
               tone={gapToC2 === 0 ? "income" : "expense"}
               showIcon={false}
               valueNoWrap
@@ -731,10 +978,14 @@ export function GoalsClient() {
           </div>
           <p className="text-sm text-muted">
             {cycleState.isBeforeStart
-              ? `Текущий статус: План еще не начался. Следующая цель: ${nextRowLabel ?? selectedRowLabel}.`
+              ? `Текущий статус: План ещё не начался. Следующая цель: ${nextRowLabel ?? summaryRowLabel}.`
               : `Текущий уровень: ${selectedRowLabel}${nextRowLabel ? `. Следующая цель: ${nextRowLabel}.` : "."}`}
           </p>
+          </>
+          ) : null}
 
+          {showWeeklyActions ? (
+          <>
           <section className="card p-4 sm:p-5">
             <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
@@ -761,80 +1012,136 @@ export function GoalsClient() {
               </div>
             </div>
 
-            <div className="mb-4 text-sm text-muted">
-              Текущая неделя: {data.weeklyTakt ? formatDate(data.weeklyTakt.weekStartDate) : "—"} —{" "}
-              {data.weeklyTakt ? formatDate(data.weeklyTakt.weekEndDate) : "—"}. Уровень:{" "}
-              {weeklyRow ? rowLabel(weeklyRow) : "—"}.
-            </div>
+            {isWeeklyNotStarted ? (
+              <div className="space-y-4">
+                <div className="rounded-lg border border-line bg-soft/30 p-4 text-sm text-muted">
+                  <p className="font-medium text-ink">План ещё не начался.</p>
+                  <p className="mt-1">Такт включится после старта плана.</p>
+                  <p className="mt-3">Старт: {formatPlanMonth(weeklyTakt?.planStartDate)}.</p>
+                  <p className="mt-1">
+                    Первая цель: A — {formatCurrencyInline(data.plan.pointA)}.
+                  </p>
+                </div>
 
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
-              <StatCard
-                label="Цель месяца"
-                value={formatCurrencyInline(weeklyMonthlyTarget)}
-                icon={Target}
-                description={weeklyScenario}
-                showIcon={false}
-                valueNoWrap
-                valueSize="compact"
-              />
-              <StatCard
-                label="Цель недели"
-                value={formatCurrencyInline(weeklyTarget)}
-                icon={CalendarDays}
-                description="цель / 4"
-                showIcon={false}
-                valueNoWrap
-                valueSize="compact"
-              />
-              <StatCard
-                label="Цель дня"
-                value={formatCurrencyInline(weeklyDailyTarget)}
-                icon={Gauge}
-                description="неделя / 5"
-                showIcon={false}
-                valueNoWrap
-                valueSize="compact"
-              />
-              <StatCard
-                label="Факт недели"
-                value={formatCurrencyInline(weeklyIncome)}
-                icon={Sigma}
-                tone={weeklyIncome >= weeklyTarget && weeklyTarget > 0 ? "income" : "neutral"}
-                showIcon={false}
-                valueNoWrap
-                valueSize="compact"
-              />
-              <StatCard
-                label="Разрыв недели"
-                value={formatCurrencyInline(weeklyGap)}
-                icon={Sigma}
-                tone={weeklyGap === 0 ? "income" : "expense"}
-                showIcon={false}
-                valueNoWrap
-                valueSize="compact"
-              />
-              <StatCard
-                label="Факт месяца"
-                value={formatCurrencyInline(weeklyMonthIncome)}
-                icon={CalendarDays}
-                showIcon={false}
-                valueNoWrap
-                valueSize="compact"
-              />
-              <StatCard
-                label="Разрыв месяца"
-                value={formatCurrencyInline(weeklyMonthGap)}
-                icon={Sigma}
-                tone={weeklyMonthGap === 0 ? "income" : "expense"}
-                showIcon={false}
-                valueNoWrap
-                valueSize="compact"
-              />
-            </div>
+                <div>
+                  <p className="mb-3 text-sm font-medium text-ink">
+                    Предварительный такт после старта
+                  </p>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <StatCard
+                      label="Цель месяца"
+                      value={formatCurrencyInline(weeklyMonthlyTarget)}
+                      icon={Target}
+                      description={weeklyScenario}
+                      showIcon={false}
+                      valueNoWrap
+                      valueSize="compact"
+                    />
+                    <StatCard
+                      label="Цель недели"
+                      value={formatCurrencyInline(weeklyTarget)}
+                      icon={CalendarDays}
+                      description="цель / 4"
+                      showIcon={false}
+                      valueNoWrap
+                      valueSize="compact"
+                    />
+                    <StatCard
+                      label="Цель рабочего дня"
+                      value={formatCurrencyInline(weeklyDailyTarget)}
+                      icon={Gauge}
+                      description="неделя / 5"
+                      showIcon={false}
+                      valueNoWrap
+                      valueSize="compact"
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="mb-4 text-sm text-muted">
+                  Текущая неделя:{" "}
+                  {weeklyTakt?.weekStartDate ? formatDate(weeklyTakt.weekStartDate) : "—"} —{" "}
+                  {weeklyTakt?.weekEndDate ? formatDate(weeklyTakt.weekEndDate) : "—"}. Уровень:{" "}
+                  {weeklyRow ? rowLabel(weeklyRow) : "—"}.
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
+                  <StatCard
+                    label="Цель месяца"
+                    value={formatCurrencyInline(weeklyMonthlyTarget)}
+                    icon={Target}
+                    description={weeklyScenario}
+                    showIcon={false}
+                    valueNoWrap
+                    valueSize="compact"
+                  />
+                  <StatCard
+                    label="Цель недели"
+                    value={formatCurrencyInline(weeklyTarget)}
+                    icon={CalendarDays}
+                    description="цель / 4"
+                    showIcon={false}
+                    valueNoWrap
+                    valueSize="compact"
+                  />
+                  <StatCard
+                    label="Цель дня"
+                    value={formatCurrencyInline(weeklyDailyTarget)}
+                    icon={Gauge}
+                    description="неделя / 5"
+                    showIcon={false}
+                    valueNoWrap
+                    valueSize="compact"
+                  />
+                  <StatCard
+                    label="Факт недели"
+                    value={formatCurrencyInline(weeklyIncome)}
+                    icon={Sigma}
+                    tone={weeklyIncome >= weeklyTarget && weeklyTarget > 0 ? "income" : "neutral"}
+                    showIcon={false}
+                    valueNoWrap
+                    valueSize="compact"
+                  />
+                  <StatCard
+                    label="Разрыв недели"
+                    value={formatCurrencyInline(weeklyGap)}
+                    icon={Sigma}
+                    tone={weeklyGap === 0 ? "income" : "expense"}
+                    showIcon={false}
+                    valueNoWrap
+                    valueSize="compact"
+                  />
+                  <StatCard
+                    label="Факт месяца"
+                    value={formatCurrencyInline(weeklyMonthIncome)}
+                    icon={CalendarDays}
+                    showIcon={false}
+                    valueNoWrap
+                    valueSize="compact"
+                  />
+                  <StatCard
+                    label="Разрыв месяца"
+                    value={formatCurrencyInline(weeklyMonthGap)}
+                    icon={Sigma}
+                    tone={weeklyMonthGap === 0 ? "income" : "expense"}
+                    showIcon={false}
+                    valueNoWrap
+                    valueSize="compact"
+                  />
+                </div>
+              </>
+            )}
           </section>
 
           <WeeklyHypotheses />
 
+          <DailyActions />
+          </>
+          ) : null}
+
+          {showYearPlan ? (
           <section className="card p-4 sm:p-5">
             <div className="mb-4">
               <h2 className="text-lg font-semibold text-ink">Годовой план</h2>
@@ -938,7 +1245,9 @@ export function GoalsClient() {
               </table>
             </div>
           </section>
+          ) : null}
 
+          {showThreeYearPlan ? (
           <section className="card p-4 sm:p-5">
             <div className="mb-4">
               <h2 className="text-lg font-semibold text-ink">План 3–2–1</h2>
@@ -1027,7 +1336,9 @@ export function GoalsClient() {
               </table>
             </div>
           </section>
+          ) : null}
 
+          {showGoalSetup ? (
           <section className="card p-4 sm:p-5">
             <div className="mb-4">
               <h2 className="text-lg font-semibold text-ink">Месячный такт</h2>
@@ -1076,6 +1387,7 @@ export function GoalsClient() {
               ))}
             </div>
           </section>
+          ) : null}
         </div>
       ) : null}
     </div>

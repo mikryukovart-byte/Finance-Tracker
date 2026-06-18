@@ -337,8 +337,8 @@ export function QuickTransactionInput({
               </option>
             ))}
           </select>
-          <Link href="/accounts" className="btn-secondary justify-center">
-            Счета
+          <Link href="/wallet" className="btn-secondary justify-center">
+            Кошелёк
           </Link>
         </div>
 
@@ -379,7 +379,7 @@ export function QuickTransactionInput({
                 Создайте категорию для типа «{typeLabels[manual.type]}».
               </div>
             )}
-            <Link href="/categories" className="btn-secondary">
+            <Link href="/settings" className="btn-secondary">
               Категории
             </Link>
           </div>

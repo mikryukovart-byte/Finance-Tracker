@@ -21,6 +21,7 @@ import type {
   AdvisorAnalysis,
   AdvisorResponse,
   AdvisorSummary,
+  DailyActionType,
   WeeklyHypothesisStatus
 } from "@/types/finance";
 
@@ -28,11 +29,32 @@ const advisorSections: Array<keyof Omit<AdvisorAnalysis, "source">> = [
   "shortConclusion",
   "mainRisk",
   "todayActions",
+  "weeklyExecution",
   "dontDo",
   "debtPriority",
   "spendingLimit",
   "hardTruth"
 ];
+
+const dailyActionTypes: DailyActionType[] = [
+  "FIRST_TOUCH",
+  "FOLLOW_UP",
+  "WARM_CONTACT",
+  "CALL",
+  "PROPOSAL",
+  "PRICE_NAMED",
+  "OTHER"
+];
+
+const dailyActionLabels: Record<DailyActionType, string> = {
+  FIRST_TOUCH: "первых касаний",
+  FOLLOW_UP: "follow-up",
+  WARM_CONTACT: "тёплых контактов",
+  CALL: "созвонов",
+  PROPOSAL: "КП",
+  PRICE_NAMED: "названных цен",
+  OTHER: "других действий"
+};
 
 function daysBefore(date: Date, days: number) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() - days);
@@ -103,6 +125,17 @@ function annualGoalCycleStep(planStartDate: Date, date: Date) {
 function annualGoalRowKeyForDate(planStartDate: Date, date: Date): GoalRowKey {
   const step = annualGoalCycleStep(planStartDate, date);
   return step === 0 ? "A" : (`B${step}` as GoalRowKey);
+}
+
+function isBeforeAnnualGoalStart(planStartDate: Date, date: Date) {
+  const start = new Date(
+    planStartDate.getFullYear(),
+    planStartDate.getMonth(),
+    planStartDate.getDate()
+  );
+  const current = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+  return current.getTime() < start.getTime();
 }
 
 function normalizeDescription(value: string | null) {
@@ -345,6 +378,24 @@ function clampItems(items: string[], limit = 4) {
   return items.filter(Boolean).slice(0, limit);
 }
 
+function emptyActionCounts() {
+  return Object.fromEntries(dailyActionTypes.map((type) => [type, 0])) as Record<
+    DailyActionType,
+    number
+  >;
+}
+
+function actionCountsText(counts: AdvisorSummary["weeklyExecution"]["actionCounts"]) {
+  return [
+    `${counts.firstTouches} первых касаний`,
+    `${counts.followUps} follow-up`,
+    `${counts.warmContacts} тёплых контактов`,
+    `${counts.calls} созвонов`,
+    `${counts.proposals} КП`,
+    `${counts.priceNamed} цен названо`
+  ].join(", ");
+}
+
 export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary> {
   const now = new Date();
   const periodStart = startOfMonth(now);
@@ -372,6 +423,7 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
     annualGoalPlan,
     threeYearGoalScenarios,
     crisisControl,
+    weeklyActions,
     weeklyHypotheses
   ] = await Promise.all([
     prisma.transaction.findMany({
@@ -575,6 +627,23 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
       orderBy: { speed: "asc" }
     }),
     getCrisisControl(userId),
+    prisma.dailyActionLog.findMany({
+      where: {
+        userId,
+        weekStartDate: weekStart,
+        deletedAt: null
+      },
+      select: {
+        id: true,
+        date: true,
+        type: true,
+        target: true,
+        value: true,
+        nextStep: true,
+        createdAt: true
+      },
+      orderBy: [{ date: "desc" }, { createdAt: "desc" }]
+    }),
     prisma.weeklyHypothesis.findMany({
       where: {
         userId,
@@ -750,7 +819,10 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
       ? "часть расходов без категорий"
       : ""
   ].filter(Boolean);
-  const currentGoalRowKey = annualGoalPlan
+  const isAnnualGoalNotStarted = annualGoalPlan
+    ? isBeforeAnnualGoalStart(annualGoalPlan.planStartDate, now)
+    : false;
+  const currentGoalRowKey = annualGoalPlan && !isAnnualGoalNotStarted
     ? annualGoalRowKeyForDate(annualGoalPlan.planStartDate, now)
     : null;
   const storedCurrentGoalRow =
@@ -818,9 +890,13 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
   const weeklyTakt =
     annualGoalPlan && currentGoalRowKey && currentGoalValues
       ? {
+          status: "ACTIVE" as const,
           selectedScenario: "C2" as const,
           rowKey: currentGoalRowKey,
           rowLabel: currentGoalRowKey,
+          nextRowKey: null,
+          nextRowLabel: null,
+          planStartDate: annualGoalPlan.planStartDate.toISOString(),
           monthlyTarget: currentGoalValues.c2Value,
           weeklyTarget: currentGoalValues.c2Value / 4,
           dailyTarget: currentGoalValues.c2Value / 20,
@@ -852,6 +928,56 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
           monthEndDate: new Date(periodEnd.getTime() - 1).toISOString()
         }
       : null;
+  const weeklyActionCounts = emptyActionCounts();
+
+  for (const action of weeklyActions) {
+    if (dailyActionTypes.includes(action.type as DailyActionType)) {
+      weeklyActionCounts[action.type as DailyActionType] += 1;
+    }
+  }
+
+  const weeklyExecution = {
+    weekStartDate: weekStart.toISOString(),
+    weekEndDate: new Date(weekEnd.getTime() - 1).toISOString(),
+    hypothesisCount: weeklyHypotheses.length,
+    actionCount: weeklyActions.length,
+    actionCounts: {
+      firstTouches: weeklyActionCounts.FIRST_TOUCH,
+      followUps: weeklyActionCounts.FOLLOW_UP,
+      warmContacts: weeklyActionCounts.WARM_CONTACT,
+      calls: weeklyActionCounts.CALL,
+      proposals: weeklyActionCounts.PROPOSAL,
+      priceNamed: weeklyActionCounts.PRICE_NAMED,
+      other: weeklyActionCounts.OTHER
+    },
+    recentActions: weeklyActions.slice(0, 5).map((action) => ({
+      date: action.date.toISOString(),
+      type: action.type as DailyActionType,
+      target: compactDescription(action.target, "Без адресата"),
+      value: action.value ? compactDescription(action.value) : null,
+      nextStep: action.nextStep ? compactDescription(action.nextStep) : null
+    })),
+    hypotheses: weeklyHypotheses
+      .filter((hypothesis) => hypothesis.status !== "DROP")
+      .sort((first, second) => {
+        const firstActive = first.status === "ACTIVE" || first.status === "PLANNED";
+        const secondActive = second.status === "ACTIVE" || second.status === "PLANNED";
+
+        if (firstActive !== secondActive) {
+          return firstActive ? -1 : 1;
+        }
+
+        return first.createdAt.getTime() - second.createdAt.getTime();
+      })
+      .slice(0, 5)
+      .map((hypothesis) => ({
+        title: hypothesis.title,
+        actionPlan: hypothesis.actionPlan,
+        expectedResult: hypothesis.expectedResult,
+        actualResult: hypothesis.actualResult,
+        status: hypothesis.status as WeeklyHypothesisStatus
+      }))
+  };
 
   return {
     generatedAt: now.toISOString(),
@@ -934,6 +1060,7 @@ export async function getAdvisorSummary(userId: string): Promise<AdvisorSummary>
       warnings: crisisControl.warnings
     },
     weeklyTakt,
+    weeklyExecution,
     weeklyHypotheses: weeklyHypotheses.map((hypothesis) => ({
       ...hypothesis,
       status: hypothesis.status as WeeklyHypothesisStatus,
@@ -968,6 +1095,8 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
   const topIncomeSource = summary.transactions.incomeSources[0];
   const currentAnnualGoal = summary.annualGoals?.currentMonth ?? null;
   const weeklyTakt = summary.weeklyTakt;
+  const weeklyExecution = summary.weeklyExecution;
+  const weeklyActionCounts = weeklyExecution.actionCounts;
   const currentHypothesis = summary.weeklyHypotheses.find((hypothesis) =>
     hypothesis.status === "ACTIVE" || hypothesis.status === "PLANNED"
   );
@@ -981,6 +1110,16 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
   const incomeDataIncomplete = summary.dataQuality.incomeStatus !== "present";
   const noIncomeWithExpenses =
     summary.totals.monthlyIncome <= 0 && summary.totals.monthlyExpense > 0;
+  const noWeeklyActions = weeklyExecution.actionCount === 0;
+  const lowWeeklyActions = weeklyExecution.actionCount > 0 && weeklyExecution.actionCount < 6;
+  const hasHypothesesWithoutActions =
+    weeklyExecution.hypothesisCount > 0 && weeklyExecution.actionCount < 3;
+  const hasActionsButNoIncome =
+    weeklyExecution.actionCount >= 10 && summary.totals.monthlyIncome <= 0;
+  const hasFollowUpsWithoutProposals =
+    weeklyActionCounts.followUps > 0 && weeklyActionCounts.proposals === 0;
+  const hasProposalsWithoutIncome =
+    weeklyActionCounts.proposals > 0 && summary.totals.monthlyIncome <= 0;
   const lowRealMoney = summary.totals.realMoney < 1000;
   const debtAboveMoney = summary.totals.totalDebt > summary.totals.realMoney;
   const strictSpendingStop = summary.totals.safeDailyLimit < 100;
@@ -1041,6 +1180,7 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
       currentAnnualGoal?.c2Plan
         ? `Годовая цель C2 на текущий месяц: ${formatRub(currentAnnualGoal.c2Plan)}. Факт: ${formatRub(currentAnnualGoal.actualIncome)}.`
         : "",
+      `Действия недели: ${actionCountsText(weeklyActionCounts)}. Гипотезы: ${weeklyExecution.hypothesisCount}.`,
       weeklyTakt
         ? `Недельный такт C2: цель ${formatRub(weeklyTakt.weeklyTarget)}, факт ${formatRub(weeklyTakt.weeklyIncome)}, разрыв ${formatRub(weeklyTakt.weeklyGap)}.`
         : ""
@@ -1061,6 +1201,12 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
       noIncomeWithExpenses
         ? "Данных о доходе нет, а расходы есть. Нельзя считать коэффициенты к доходу; сначала нужен подтвержденный денежный вход."
         : "",
+      lowRealMoney && weeklyExecution.actionCount < 6
+        ? "Главная проблема сейчас не в стратегии, а в недостатке действий для нового денежного входа."
+        : "",
+      hasHypothesesWithoutActions
+        ? `Гипотезы недели есть (${weeklyExecution.hypothesisCount}), но действий всего ${weeklyExecution.actionCount}. Гипотеза не проверена объемом.`
+        : "",
       summary.totals.requiredPaymentsBeforeMonthEnd > summary.totals.realMoney
         ? `Платежи до конца месяца ${formatRub(summary.totals.requiredPaymentsBeforeMonthEnd)} выше реальных денег ${formatRub(summary.totals.realMoney)}.`
         : "",
@@ -1078,6 +1224,9 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
         : ""
     ]),
     todayActions: clampItems([
+      noWeeklyActions
+        ? "Сегодня минимум: 3 первых касания + 3 follow-up."
+        : "",
       noIncomeWithExpenses
         ? "Зафиксировать ближайший реальный источник денег: оплата, аванс, возврат долга, продажа лишнего или подработка."
         : "",
@@ -1101,6 +1250,30 @@ export function buildRuleBasedAnalysis(summary: AdvisorSummary): AdvisorAnalysis
         ? "Сегодня не покупать ничего необязательного."
         : `Держать траты сегодня в пределах ${formatRub(Math.max(0, summary.totals.safeDailyLimit))}.`
     ]),
+    weeklyExecution: clampItems([
+      `На этой неделе: ${actionCountsText(weeklyActionCounts)}. Всего действий: ${weeklyExecution.actionCount}.`,
+      noWeeklyActions
+        ? "Действий нет. Сегодня минимум: 3 первых касания + 3 follow-up."
+        : "",
+      hasHypothesesWithoutActions
+        ? `Гипотезы пока не проверены: ${weeklyExecution.hypothesisCount} гипотез, но ${weeklyExecution.actionCount} действий.`
+        : "",
+      hasActionsButNoIncome
+        ? "Объем действий есть, а дохода нет: менять оффер, аудиторию, текст или цену."
+        : "",
+      hasFollowUpsWithoutProposals
+        ? "Есть follow-up, но нет КП. Дожимай разговоры до предложения и цены."
+        : "",
+      hasProposalsWithoutIncome
+        ? "КП есть, денег нет: фокус на follow-up, сроках оплаты и конкретном следующем шаге."
+        : "",
+      lowWeeklyActions
+        ? `Объем низкий: ${weeklyExecution.actionCount} действий за неделю. Этого мало, чтобы проверить гипотезу.`
+        : "",
+      weeklyExecution.recentActions[0]
+        ? `Последнее действие: ${compactDate(weeklyExecution.recentActions[0].date)} · ${dailyActionLabels[weeklyExecution.recentActions[0].type]} · ${weeklyExecution.recentActions[0].target ?? "без адресата"}.`
+        : ""
+    ], 4),
     dontDo: clampItems([
       "Не считать доступный лимит кредитки своими деньгами.",
       noIncomeWithExpenses
@@ -1296,6 +1469,9 @@ function buildOpenAiAdvisorContext(summary: AdvisorSummary) {
       "balance adjustments are not income or expense",
       "annual income goals are targets only, not real income",
       "weekly takt and weekly hypotheses are operating targets only, not real income",
+      "weeklyExecution shows actual client/project seeking actions and should influence recommendations",
+      "if weekly actions are low and cash is low, prioritize action volume over abstract strategy",
+      "if hypotheses exist but actions are low, say hypotheses are not tested",
       "crisis warnings should outrank cosmetic optimization",
       "must use actual categories, accounts and transactions listed in this context",
       "recommend concrete actions with numbers, categories and deadlines"
@@ -1412,6 +1588,11 @@ function buildOpenAiAdvisorContext(summary: AdvisorSummary) {
           warning: "Weekly takt is an operating target only, not real income."
         }
       : null,
+    weeklyExecution: {
+      ...summary.weeklyExecution,
+      note:
+        "Daily actions are real execution signals for finding clients, customers and projects. They are not income, but they explain whether income hypotheses are being tested."
+    },
     weeklyHypotheses: summary.weeklyHypotheses.map((hypothesis) => ({
       title: hypothesis.title,
       actionPlan: hypothesis.actionPlan,
@@ -1466,6 +1647,7 @@ async function callOpenAi(summary: AdvisorSummary): Promise<AdvisorAnalysis> {
             "Не считай корректировки баланса доходом или расходом.",
             "Годовые цели дохода — это план, а не факт. Не улучшай cash flow и баланс на основе целей.",
             "Недельный такт и гипотезы недели — это операционный план, не фактический доход.",
+            "Действия недели — это сигнал исполнения. Анализируй объем действий, follow-up, КП, названные цены и связь с гипотезами.",
             "Верни только валидный JSON без markdown."
           ].join("\n")
         },
@@ -1478,6 +1660,7 @@ async function callOpenAi(summary: AdvisorSummary): Promise<AdvisorAnalysis> {
             '"shortConclusion": string[],',
             '"mainRisk": string[],',
             '"todayActions": string[],',
+            '"weeklyExecution": string[],',
             '"dontDo": string[],',
             '"debtPriority": string[],',
             '"spendingLimit": string[],',
@@ -1487,6 +1670,7 @@ async function callOpenAi(summary: AdvisorSummary): Promise<AdvisorAnalysis> {
             "- shortConclusion = текущая ситуация: короткий реалистичный диагноз.",
             "- mainRisk = главная опасность, которая может ударить сейчас.",
             "- todayActions = ровно 3 конкретных действия на сегодня.",
+            "- weeklyExecution = короткий вывод по действиям недели: объем, гипотезы, где застрял процесс.",
             "- dontDo = конкретные запреты: что не делать.",
             "- debtPriority = стратегия долга: какой долг атаковать первым и почему.",
             "- spendingLimit = безопасный дневной лимит и как его соблюдать.",
@@ -1501,6 +1685,11 @@ async function callOpenAi(summary: AdvisorSummary): Promise<AdvisorAnalysis> {
             "- Если annualIncomeGoals есть, используй gap и KPI как план действий, но не как фактический доход.",
             "- Если weeklyTakt есть, используй разрыв недели и месяца для действий на сегодня.",
             "- Если weeklyHypotheses есть, выбери одну активную/запланированную гипотезу и предложи следующий проверяемый шаг.",
+            "- Если weeklyExecution.actionCount равен 0, напиши: «Сегодня минимум: 3 первых касания + 3 follow-up».",
+            "- Если есть гипотезы, но мало действий, напиши что гипотеза не проверена, потому что объём действий не выполнен.",
+            "- Если действий много, а дохода нет, предложи менять оффер / аудиторию / текст / цену.",
+            "- Если есть follow-up, но нет КП, скажи дожимать до КП и цены.",
+            "- Если есть КП, но денег нет, фокус на follow-up, сроках оплаты и конкретном следующем шаге.",
             "- Если crisisControl.isCritical true, главный риск должен быть кассовый разрыв.",
             "- Если safeDailySpendingLimit ниже 100 ₽, запрети все необязательные расходы.",
             "- Если топ категории включают кафе, кофе, алкоголь, фастфуд или развлечения — назови это прямо.",

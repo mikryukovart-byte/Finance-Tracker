@@ -4,12 +4,9 @@ import {
   BarChart3,
   Brain,
   CreditCard,
-  FolderTree,
   Home,
-  Landmark,
   ListChecks,
   LogOut,
-  Scale,
   Settings,
   Target
 } from "lucide-react";
@@ -18,14 +15,11 @@ import { usePathname, useRouter } from "next/navigation";
 
 const navigation = [
   { href: "/", label: "Главная", icon: Home },
-  { href: "/truth", label: "Правда", icon: Scale },
-  { href: "/accounts", label: "Счета", icon: Landmark },
   { href: "/operations", label: "Операции", icon: ListChecks },
-  { href: "/categories", label: "Категории", icon: FolderTree },
-  { href: "/loans", label: "Кредиты", icon: CreditCard },
-  { href: "/reports", label: "Отчеты", icon: BarChart3 },
+  { href: "/wallet", label: "Кошелёк", icon: CreditCard },
+  { href: "/strategy", label: "Стратегия", icon: Target },
+  { href: "/analytics", label: "Аналитика", icon: BarChart3 },
   { href: "/advisor", label: "Советник", icon: Brain },
-  { href: "/goals", label: "Годовые цели", icon: Target },
   { href: "/settings", label: "Настройки", icon: Settings }
 ];
 
