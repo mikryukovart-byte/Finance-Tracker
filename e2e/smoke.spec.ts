@@ -58,6 +58,18 @@ test.describe("smoke", () => {
     }
   });
 
+  test("switches wallet sections", async ({ page }) => {
+    await openAppPage(page, "/wallet", "Кошелёк");
+
+    await page.getByRole("button", { name: /Кредиты/ }).first().click();
+    await expect(page.getByRole("heading", { name: "Кредиты", exact: true })).toBeVisible();
+    await expectNoFatalError(page);
+
+    await page.getByRole("button", { name: /Счета/ }).first().click();
+    await expect(page.getByRole("heading", { name: "Счета", exact: true })).toBeVisible();
+    await expectNoFatalError(page);
+  });
+
   test("updates annual goal start date without timezone shift", async ({ page }) => {
     await openAppPage(page, "/strategy/goals", "Цели");
 

@@ -347,6 +347,7 @@ export function AccountsClient() {
       resetForm();
       setMessage(editingId ? "Счет обновлен" : "Счет создан");
       setMessageTone("success");
+      window.dispatchEvent(new Event("finance-data-changed"));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Не удалось сохранить счет");
       setMessageTone("error");
@@ -403,6 +404,7 @@ export function AccountsClient() {
       await loadData(false, true);
       setMessage("Счет удален");
       setMessageTone("success");
+      window.dispatchEvent(new Event("finance-data-changed"));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Не удалось удалить счет");
       setMessageTone("error");
@@ -531,6 +533,7 @@ export function AccountsClient() {
       setTransferForm(createTransferForm(accounts));
       setMessage("Перевод выполнен");
       setMessageTone("success");
+      window.dispatchEvent(new Event("finance-data-changed"));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Не удалось выполнить перевод");
       setMessageTone("error");

@@ -390,6 +390,7 @@ export function LoansClient() {
       resetForm();
       setMessage(editingId ? "Кредит обновлен" : "Кредит добавлен");
       setMessageTone("success");
+      window.dispatchEvent(new Event("finance-data-changed"));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Неизвестная ошибка");
       setMessageTone("error");
@@ -421,6 +422,7 @@ export function LoansClient() {
       }
       setMessage("Кредит удален");
       setMessageTone("success");
+      window.dispatchEvent(new Event("finance-data-changed"));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Неизвестная ошибка");
       setMessageTone("error");
@@ -480,6 +482,7 @@ export function LoansClient() {
       await loadLoans(false, true);
       setMessage("Платеж добавлен и учтен как расход");
       setMessageTone("success");
+      window.dispatchEvent(new Event("finance-data-changed"));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Не удалось добавить платеж");
       setMessageTone("error");
@@ -510,6 +513,7 @@ export function LoansClient() {
       await loadLoans(false, true);
       setMessage("Платеж удален");
       setMessageTone("success");
+      window.dispatchEvent(new Event("finance-data-changed"));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Не удалось удалить платеж");
       setMessageTone("error");

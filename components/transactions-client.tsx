@@ -188,6 +188,7 @@ export function TransactionsClient() {
   const [form, setForm] = useState<TransactionForm>(() => createInitialForm());
   const [filters, setFilters] = useState<TransactionFilters>(defaultFilters);
   const [period, setPeriod] = useState(() => initialTransactionsPeriod);
+  const [showTransactionHistory, setShowTransactionHistory] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [movingTransaction, setMovingTransaction] = useState<Transaction | null>(null);
@@ -1145,8 +1146,7 @@ export function TransactionsClient() {
               </div>
             </div>
 
-            <div className="mt-3 flex items-center justify-between gap-3">
-              <div className="text-sm text-muted">Найдено: {transactions.length}</div>
+            <div className="mt-3 flex justify-end">
               <button
                 type="button"
                 className="btn-secondary"
@@ -1161,135 +1161,162 @@ export function TransactionsClient() {
             </div>
           </div>
 
-          {loading && transactions.length > 0 ? (
-            <p className="text-sm text-muted">Обновляем данные…</p>
-          ) : null}
-
-          {loading && transactions.length === 0 ? (
-            <>
-              <p className="text-sm text-muted">Загрузка...</p>
-              <div className="card p-4 sm:p-5">
-                <div className="space-y-3">
-                  <div className="h-3 w-3/4 animate-pulse rounded-md bg-soft/50" />
-                  <div className="h-3 w-2/3 animate-pulse rounded-md bg-soft/40" />
-                  <div className="h-3 w-5/6 animate-pulse rounded-md bg-soft/40" />
-                  <div className="h-3 w-1/2 animate-pulse rounded-md bg-soft/30" />
-                </div>
+          <div className="card p-4 sm:p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-ink">История операций</h2>
+                <p className="mt-1 text-sm text-muted">
+                  Найдено: {transactions.length}
+                  {loading
+                    ? transactions.length > 0
+                      ? " · обновляем данные"
+                      : " · загружаем"
+                    : ""}
+                </p>
               </div>
-            </>
-          ) : transactions.length === 0 ? (
-            <EmptyState text="Операций по выбранным условиям нет" />
-          ) : (
-            <div>
-              <div className="hidden lg:block">
-                <div className="table-wrap">
-                  <table className="table-base table-fixed">
-                    <colgroup>
-                      <col className="w-[108px]" />
-                      <col className="w-[104px]" />
-                      <col className="w-[16%]" />
-                      <col className="w-[16%]" />
-                      <col />
-                      <col className="w-[128px]" />
-                      <col className="w-[132px]" />
-                    </colgroup>
-                    <thead>
-                      <tr>
-                        <th>Дата</th>
-                        <th>Тип</th>
-                        <th>Категория</th>
-                        <th>Счет</th>
-                        <th>Описание</th>
-                        <th className="text-right">Сумма</th>
-                        <th className="text-right">Действия</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {transactions.map((transaction) => (
-                        <tr key={transaction.id}>
-                          <td className="whitespace-nowrap">{formatDate(transaction.date)}</td>
-                          <td>
-                            <span
-                              className={`rounded-full px-2 py-1 text-xs font-medium ${
-                                transactionBadgeClass(transaction)
-                              }`}
-                            >
-                              {typeLabels[transaction.type]}
-                            </span>
-                          </td>
-                          <td>
-                            <div className="truncate font-medium text-ink">
+              <button
+                type="button"
+                className="btn-secondary w-full sm:w-auto"
+                onClick={() => setShowTransactionHistory((current) => !current)}
+              >
+                {showTransactionHistory ? "Скрыть операции" : "Показать операции"}
+              </button>
+            </div>
+          </div>
+
+          {showTransactionHistory ? (
+            <>
+              {loading && transactions.length > 0 ? (
+                <p className="text-sm text-muted">Обновляем данные…</p>
+              ) : null}
+
+              {loading && transactions.length === 0 ? (
+                <>
+                  <p className="text-sm text-muted">Загрузка...</p>
+                  <div className="card p-4 sm:p-5">
+                    <div className="space-y-3">
+                      <div className="h-3 w-3/4 animate-pulse rounded-md bg-soft/50" />
+                      <div className="h-3 w-2/3 animate-pulse rounded-md bg-soft/40" />
+                      <div className="h-3 w-5/6 animate-pulse rounded-md bg-soft/40" />
+                      <div className="h-3 w-1/2 animate-pulse rounded-md bg-soft/30" />
+                    </div>
+                  </div>
+                </>
+              ) : transactions.length === 0 ? (
+                <EmptyState text="Операций по выбранным условиям нет" />
+              ) : (
+                <div>
+                  <div className="hidden lg:block">
+                    <div className="table-wrap">
+                      <table className="table-base table-fixed">
+                        <colgroup>
+                          <col className="w-[108px]" />
+                          <col className="w-[104px]" />
+                          <col className="w-[16%]" />
+                          <col className="w-[16%]" />
+                          <col />
+                          <col className="w-[128px]" />
+                          <col className="w-[132px]" />
+                        </colgroup>
+                        <thead>
+                          <tr>
+                            <th>Дата</th>
+                            <th>Тип</th>
+                            <th>Категория</th>
+                            <th>Счет</th>
+                            <th>Описание</th>
+                            <th className="text-right">Сумма</th>
+                            <th className="text-right">Действия</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {transactions.map((transaction) => (
+                            <tr key={transaction.id}>
+                              <td className="whitespace-nowrap">{formatDate(transaction.date)}</td>
+                              <td>
+                                <span
+                                  className={`rounded-full px-2 py-1 text-xs font-medium ${
+                                    transactionBadgeClass(transaction)
+                                  }`}
+                                >
+                                  {typeLabels[transaction.type]}
+                                </span>
+                              </td>
+                              <td>
+                                <div className="truncate font-medium text-ink">
+                                  {transactionCategoryName(transaction)}
+                                </div>
+                              </td>
+                              <td>
+                                <div className="truncate text-muted">
+                                  {transaction.account?.name ?? "Счет"}
+                                </div>
+                              </td>
+                              <td>
+                                <div className="truncate text-muted">
+                                  {transaction.description || "Без описания"}
+                                </div>
+                              </td>
+                              <td
+                                className={`whitespace-nowrap text-right font-semibold ${
+                                  transactionAmountClass(transaction)
+                                }`}
+                              >
+                                {transactionAmountPrefix(transaction)}
+                                {formatCurrency(transaction.amount)}
+                              </td>
+                              <td>{renderTransactionActions(transaction)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 lg:hidden">
+                    {transactions.map((transaction) => (
+                      <article key={transaction.id} className="card p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-xs text-muted">
+                                {formatDate(transaction.date)}
+                              </span>
+                              <span
+                                className={`rounded-full px-2 py-1 text-xs font-medium ${
+                                  transactionBadgeClass(transaction)
+                                }`}
+                              >
+                                {typeLabels[transaction.type]}
+                              </span>
+                            </div>
+                            <div className="mt-2 truncate font-medium text-ink">
                               {transactionCategoryName(transaction)}
                             </div>
-                          </td>
-                          <td>
-                            <div className="truncate text-muted">
+                            <div className="mt-1 text-sm text-muted">
                               {transaction.account?.name ?? "Счет"}
+                              {transaction.description ? ` · ${transaction.description}` : ""}
                             </div>
-                          </td>
-                          <td>
-                            <div className="truncate text-muted">
-                              {transaction.description || "Без описания"}
-                            </div>
-                          </td>
-                          <td
-                            className={`whitespace-nowrap text-right font-semibold ${
+                          </div>
+                          <div
+                            className={`shrink-0 whitespace-nowrap text-right font-semibold ${
                               transactionAmountClass(transaction)
                             }`}
                           >
                             {transactionAmountPrefix(transaction)}
                             {formatCurrency(transaction.amount)}
-                          </td>
-                          <td>{renderTransactionActions(transaction)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                          </div>
+                        </div>
+                        <div className="mt-3 border-t border-line pt-3">
+                          {renderTransactionActions(transaction, true)}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
                 </div>
-              </div>
-
-              <div className="space-y-3 lg:hidden">
-                {transactions.map((transaction) => (
-                  <article key={transaction.id} className="card p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-xs text-muted">
-                            {formatDate(transaction.date)}
-                          </span>
-                          <span
-                            className={`rounded-full px-2 py-1 text-xs font-medium ${
-                              transactionBadgeClass(transaction)
-                            }`}
-                          >
-                            {typeLabels[transaction.type]}
-                          </span>
-                        </div>
-                        <div className="mt-2 truncate font-medium text-ink">
-                          {transactionCategoryName(transaction)}
-                        </div>
-                        <div className="mt-1 text-sm text-muted">
-                          {transaction.account?.name ?? "Счет"}
-                          {transaction.description ? ` · ${transaction.description}` : ""}
-                        </div>
-                      </div>
-                      <div
-                        className={`shrink-0 whitespace-nowrap text-right font-semibold ${
-                          transactionAmountClass(transaction)
-                        }`}
-                      >
-                        {transactionAmountPrefix(transaction)}
-                        {formatCurrency(transaction.amount)}
-                      </div>
-                    </div>
-                    <div className="mt-3 border-t border-line pt-3">
-                      {renderTransactionActions(transaction, true)}
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </div>
-          )}
+              )}
+            </>
+          ) : null}
         </section>
       </div>
     </div>
