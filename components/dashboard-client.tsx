@@ -110,6 +110,7 @@ export function DashboardClient() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [period, setPeriod] = useState(() => initialDashboardPeriod);
   const [quickAdd, setQuickAdd] = useState<QuickAddForm>(initialQuickAdd);
+  const [showRecentTransactions, setShowRecentTransactions] = useState(false);
   const [quickStatus, setQuickStatus] = useState<QuickAddStatus | null>(null);
   const [successPulse, setSuccessPulse] = useState(false);
   const [monthlyLimit, setMonthlyLimit] = useState(0);
@@ -733,51 +734,67 @@ export function DashboardClient() {
           </section>
 
           <section className="mt-6 card p-4 sm:p-5">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold text-ink">Последние операции</h2>
-              <Link
-                href="/operations"
-                className="text-sm font-medium text-accent hover:underline"
-              >
-                Все операции
-              </Link>
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-ink">Последние операции</h2>
+                <p className="mt-1 text-sm text-muted">
+                  Последних операций: {stats.recentTransactions.length}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  href="/operations"
+                  className="btn-secondary min-h-10 px-3"
+                >
+                  Все операции
+                </Link>
+                <button
+                  type="button"
+                  className="btn-secondary min-h-10 px-3"
+                  onClick={() => setShowRecentTransactions((current) => !current)}
+                >
+                  {showRecentTransactions ? "Скрыть операции" : "Показать операции"}
+                </button>
+              </div>
             </div>
 
-            {stats.recentTransactions.length === 0 ? (
-              <EmptyState text="Операций пока нет" />
-            ) : (
-              <div className="space-y-2">
-                {stats.recentTransactions.map((transaction) => (
-                  <div
-                    key={transaction.id}
-                    className="flex flex-col gap-2 rounded-md border border-line px-3 py-3 transition hover:bg-soft/60 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-medium text-ink">
-                          {transactionCategoryName(transaction)}
-                        </span>
-                        <span className="rounded-full bg-soft px-2 py-0.5 text-xs text-muted">
-                          {typeLabels[transaction.type]}
-                        </span>
-                      </div>
-                      <div className="mt-1 text-sm text-muted">
-                        {formatDate(transaction.date)}
-                        {transaction.description ? ` · ${transaction.description}` : ""}
-                      </div>
-                    </div>
+            {showRecentTransactions ? (
+              stats.recentTransactions.length === 0 ? (
+                <EmptyState text="Операций пока нет" />
+              ) : (
+                <div className="space-y-2">
+                  {stats.recentTransactions.map((transaction) => (
                     <div
-                      className={`text-base font-semibold ${
-                        transactionAmountClass(transaction)
-                      }`}
+                      key={transaction.id}
+                      className="flex flex-col gap-2 rounded-md border border-line px-3 py-3 transition hover:bg-soft/60 sm:flex-row sm:items-center sm:justify-between"
                     >
-                      {transactionAmountPrefix(transaction)}
-                      {formatCurrency(transaction.amount)}
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium text-ink">
+                            {transactionCategoryName(transaction)}
+                          </span>
+                          <span className="rounded-full bg-soft px-2 py-0.5 text-xs text-muted">
+                            {typeLabels[transaction.type]}
+                          </span>
+                        </div>
+                        <div className="mt-1 text-sm text-muted">
+                          {formatDate(transaction.date)}
+                          {transaction.description ? ` · ${transaction.description}` : ""}
+                        </div>
+                      </div>
+                      <div
+                        className={`text-base font-semibold ${
+                          transactionAmountClass(transaction)
+                        }`}
+                      >
+                        {transactionAmountPrefix(transaction)}
+                        {formatCurrency(transaction.amount)}
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ))}
+                </div>
+              )
+            ) : null}
           </section>
         </>
       ) : null}

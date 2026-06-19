@@ -70,6 +70,38 @@ test.describe("smoke", () => {
     await expectNoFatalError(page);
   });
 
+  test("toggles long list blocks", async ({ page }) => {
+    await openAppPage(page, "/", "Главная");
+    const dashboardOperationsToggle = page
+      .getByRole("button", { name: /Показать операции|Скрыть операции/ })
+      .first();
+    await expect(dashboardOperationsToggle).toBeVisible();
+    await dashboardOperationsToggle.click();
+    await expect(
+      page.getByRole("button", { name: /Показать операции|Скрыть операции/ }).first()
+    ).toBeVisible();
+
+    await openAppPage(page, "/strategy/actions", "Неделя");
+    const hypothesesToggle = page.getByRole("button", {
+      name: /Показать гипотезы|Скрыть гипотезы/
+    });
+    await expect(hypothesesToggle).toBeVisible();
+    await hypothesesToggle.click();
+    await expect(
+      page.getByRole("button", { name: /Показать гипотезы|Скрыть гипотезы/ })
+    ).toBeVisible();
+
+    const actionsToggle = page.getByRole("button", {
+      name: /Показать действия|Скрыть действия/
+    });
+    await expect(actionsToggle).toBeVisible();
+    await actionsToggle.click();
+    await expect(
+      page.getByRole("button", { name: /Показать действия|Скрыть действия/ })
+    ).toBeVisible();
+    await expectNoFatalError(page);
+  });
+
   test("updates annual goal start date without timezone shift", async ({ page }) => {
     await openAppPage(page, "/strategy/goals", "Цели");
 

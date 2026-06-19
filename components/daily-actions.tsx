@@ -106,6 +106,13 @@ export function DailyActions() {
   const [data, setData] = useState<DailyActionsResponse | null>(() =>
     readClientCache<DailyActionsResponse>(actionCacheKey(currentWeekStart))
   );
+  const [isExpanded, setIsExpanded] = useState(() => {
+    if (typeof window === "undefined") {
+      return true;
+    }
+
+    return window.localStorage.getItem("strategyDailyActionsCollapsed") !== "true";
+  });
   const [drafts, setDrafts] = useState<Record<string, ActionForm>>({});
   const [form, setForm] = useState<ActionForm>(() => blankForm());
   const [loading, setLoading] = useState(() => !data);
@@ -158,6 +165,10 @@ export function DailyActions() {
   useEffect(() => {
     loadActions();
   }, [loadActions]);
+
+  useEffect(() => {
+    window.localStorage.setItem("strategyDailyActionsCollapsed", String(!isExpanded));
+  }, [isExpanded]);
 
   function shiftWeek(days: number) {
     setWeekStart((current) => toDateInputValue(addDays(dateFromInput(current), days)));
@@ -287,6 +298,13 @@ export function DailyActions() {
           <Link href="/strategy/actions/history" className="btn-secondary min-h-10 px-3">
             Открыть полный дневник
           </Link>
+          <button
+            type="button"
+            className="btn-secondary min-h-10 px-3"
+            onClick={() => setIsExpanded((current) => !current)}
+          >
+            {isExpanded ? "Скрыть действия" : "Показать действия"}
+          </button>
           <button type="button" className="btn-secondary min-h-10 px-3" onClick={() => shiftWeek(-7)}>
             <ChevronLeft className="h-4 w-4" aria-hidden="true" />
             Предыдущая
@@ -335,7 +353,9 @@ export function DailyActions() {
         </div>
       </div>
 
-      <form className="mb-5 grid gap-3 lg:grid-cols-[150px_180px_1fr_1fr_1fr_auto]" onSubmit={createAction}>
+      {isExpanded ? (
+        <>
+          <form className="mb-5 grid gap-3 lg:grid-cols-[150px_180px_1fr_1fr_1fr_auto]" onSubmit={createAction}>
         <label className="text-sm">
           <span className="field-label">Дата</span>
           <input
@@ -397,22 +417,22 @@ export function DailyActions() {
             {creating ? "Добавляем" : "Добавить"}
           </button>
         </div>
-      </form>
+          </form>
 
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-ink">Последние действия</h3>
-        {loading && data ? <span className="text-xs text-muted">Обновляем…</span> : null}
-      </div>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-ink">Последние действия</h3>
+            {loading && data ? <span className="text-xs text-muted">Обновляем…</span> : null}
+          </div>
 
-      {loading && !data ? (
-        <p className="text-sm text-muted">Загрузка...</p>
-      ) : data?.actions.length ? (
-        <div className="grid gap-3">
-          {data.actions.map((action) => {
-            const draft = drafts[action.id] ?? normalizeForm(action);
+          {loading && !data ? (
+            <p className="text-sm text-muted">Загрузка...</p>
+          ) : data?.actions.length ? (
+            <div className="grid gap-3">
+              {data.actions.map((action) => {
+                const draft = drafts[action.id] ?? normalizeForm(action);
 
-            return (
-              <div key={action.id} className="rounded-md border border-line p-3">
+                return (
+                  <div key={action.id} className="rounded-md border border-line p-3">
                 <div className="mb-3 text-sm font-medium text-ink">
                   {formatDate(action.date)} · {actionLabels[action.type]} ·{" "}
                   {action.target || "Без адресата"}
@@ -517,12 +537,20 @@ export function DailyActions() {
                     Удалить
                   </button>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <EmptyState text="На эту неделю действий пока нет." />
+          )}
+        </>
       ) : (
-        <EmptyState text="На эту неделю действий пока нет." />
+        <div className="rounded-md border border-line bg-soft/20 px-3 py-3 text-sm text-muted">
+          Действия недели: {actionCount}.
+          {weekLabel ? ` Неделя: ${weekLabel}.` : ""}
+          {loading ? " Загружаем данные..." : ""}
+        </div>
       )}
     </section>
   );

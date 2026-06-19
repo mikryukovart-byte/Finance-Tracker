@@ -93,6 +93,13 @@ export function WeeklyHypotheses() {
   const [data, setData] = useState<HypothesesResponse | null>(() =>
     readClientCache<HypothesesResponse>(hypothesisCacheKey(toDateInputValue(startOfWeek())))
   );
+  const [isExpanded, setIsExpanded] = useState(() => {
+    if (typeof window === "undefined") {
+      return true;
+    }
+
+    return window.localStorage.getItem("strategyHypothesesCollapsed") !== "true";
+  });
   const [drafts, setDrafts] = useState<Record<string, HypothesisForm>>({});
   const [form, setForm] = useState(initialForm);
   const [loading, setLoading] = useState(() => !data);
@@ -108,6 +115,7 @@ export function WeeklyHypotheses() {
 
     return `${formatDate(data.weekStartDate)} — ${formatDate(data.weekEndDate)}`;
   }, [data]);
+  const hypothesisCount = data?.hypotheses.length ?? 0;
 
   const loadHypotheses = useCallback(async (force = false) => {
     setError("");
@@ -147,6 +155,10 @@ export function WeeklyHypotheses() {
   useEffect(() => {
     loadHypotheses();
   }, [loadHypotheses]);
+
+  useEffect(() => {
+    window.localStorage.setItem("strategyHypothesesCollapsed", String(!isExpanded));
+  }, [isExpanded]);
 
   function shiftWeek(days: number) {
     setWeekStart((current) => toDateInputValue(addDays(new Date(`${current}T12:00:00`), days)));
@@ -259,6 +271,13 @@ export function WeeklyHypotheses() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="btn-secondary min-h-10 px-3"
+            onClick={() => setIsExpanded((current) => !current)}
+          >
+            {isExpanded ? "Скрыть гипотезы" : "Показать гипотезы"}
+          </button>
           <button type="button" className="btn-secondary min-h-10 px-3" onClick={() => shiftWeek(-7)}>
             <ChevronLeft className="h-4 w-4" aria-hidden="true" />
             Предыдущая
@@ -276,11 +295,16 @@ export function WeeklyHypotheses() {
         </div>
       </div>
 
-      {weekLabel ? <div className="mb-4 text-sm text-muted">Неделя: {weekLabel}</div> : null}
+      <div className="mb-4 text-sm text-muted">
+        {weekLabel ? `Неделя: ${weekLabel}. ` : ""}
+        Гипотез недели: {hypothesisCount}.
+      </div>
       {message ? <div className="mb-3 text-sm text-profit">{message}</div> : null}
       {error ? <div className="mb-3 text-sm text-loss">{error}</div> : null}
 
-      <form className="mb-5 grid gap-3 lg:grid-cols-[1fr_1fr_1fr_auto]" onSubmit={createHypothesis}>
+      {isExpanded ? (
+        <>
+          <form className="mb-5 grid gap-3 lg:grid-cols-[1fr_1fr_1fr_auto]" onSubmit={createHypothesis}>
         <input
           className="field"
           value={form.title}
@@ -303,18 +327,18 @@ export function WeeklyHypotheses() {
           <Plus className="h-4 w-4" aria-hidden="true" />
           {creating ? "Добавляем" : "Добавить"}
         </button>
-      </form>
+          </form>
 
-      {loading && data ? <p className="mb-3 text-sm text-muted">Обновляем гипотезы…</p> : null}
-      {loading && !data ? (
-        <p className="text-sm text-muted">Загрузка...</p>
-      ) : data?.hypotheses.length ? (
-        <div className="grid gap-3">
-          {data.hypotheses.map((hypothesis) => {
-            const draft = drafts[hypothesis.id] ?? normalizeForm(hypothesis);
+          {loading && data ? <p className="mb-3 text-sm text-muted">Обновляем гипотезы…</p> : null}
+          {loading && !data ? (
+            <p className="text-sm text-muted">Загрузка...</p>
+          ) : data?.hypotheses.length ? (
+            <div className="grid gap-3">
+              {data.hypotheses.map((hypothesis) => {
+                const draft = drafts[hypothesis.id] ?? normalizeForm(hypothesis);
 
-            return (
-              <div key={hypothesis.id} className="rounded-md border border-line p-3">
+                return (
+                  <div key={hypothesis.id} className="rounded-md border border-line p-3">
                 <div className="grid gap-3 lg:grid-cols-2">
                   <label className="text-sm">
                     <span className="field-label">Гипотеза</span>
@@ -423,12 +447,20 @@ export function WeeklyHypotheses() {
                     Удалить
                   </button>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <EmptyState text="На эту неделю гипотез пока нет" />
+          )}
+        </>
       ) : (
-        <EmptyState text="На эту неделю гипотез пока нет" />
+        <div className="rounded-md border border-line bg-soft/20 px-3 py-3 text-sm text-muted">
+          {weekLabel ? `Неделя: ${weekLabel}. ` : ""}
+          Гипотез недели: {hypothesisCount}.
+          {loading ? " Загружаем данные..." : ""}
+        </div>
       )}
     </section>
   );
