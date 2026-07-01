@@ -39,6 +39,33 @@ async function openAppPage(page: Page, path: string, title: string) {
   await expectNoFatalError(page);
 }
 
+function toDateInputValue(date: Date) {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0")
+  ].join("-");
+}
+
+function monthYearLabel(date: Date) {
+  const label = new Intl.DateTimeFormat("ru-RU", {
+    month: "long",
+    year: "numeric"
+  })
+    .format(date)
+    .replace(/\s*г\.$/, "");
+
+  return `${label.charAt(0).toLocaleUpperCase("ru-RU")}${label.slice(1)}`;
+}
+
+function russianDateLabel(date: Date) {
+  return [
+    String(date.getDate()).padStart(2, "0"),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    date.getFullYear()
+  ].join(".");
+}
+
 test.describe("smoke", () => {
   test.beforeEach(async ({ page }) => {
     await openAppPage(page, "/", "Главная");
@@ -62,11 +89,11 @@ test.describe("smoke", () => {
     await openAppPage(page, "/wallet", "Кошелёк");
 
     await page.getByRole("button", { name: /Кредиты/ }).first().click();
-    await expect(page.getByRole("heading", { name: "Кредиты", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Кредиты", level: 1 })).toBeVisible();
     await expectNoFatalError(page);
 
     await page.getByRole("button", { name: /Счета/ }).first().click();
-    await expect(page.getByRole("heading", { name: "Счета", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Счета", level: 1 })).toBeVisible();
     await expectNoFatalError(page);
   });
 
@@ -105,10 +132,26 @@ test.describe("smoke", () => {
   test("updates annual goal start date without timezone shift", async ({ page }) => {
     await openAppPage(page, "/strategy/goals", "Цели");
 
+    const now = new Date();
+    const planStartDate = new Date(now.getFullYear(), now.getMonth() + 1, 1, 12);
+    const followingMonth = new Date(
+      planStartDate.getFullYear(),
+      planStartDate.getMonth() + 1,
+      1,
+      12
+    );
+    const dayBeforePlanStart = new Date(
+      planStartDate.getFullYear(),
+      planStartDate.getMonth(),
+      0,
+      12
+    );
+    const planStartInput = toDateInputValue(planStartDate);
+
     const settingsForm = page.locator("form").filter({ hasText: "Настройки плана" });
 
     await settingsForm.getByRole("button", { name: "Ввести вручную" }).click();
-    await settingsForm.getByLabel("Дата старта плана").fill("2026-07-01");
+    await settingsForm.getByLabel("Дата старта плана").fill(planStartInput);
     await settingsForm.getByLabel("Значение точки А").fill("75000");
     await settingsForm.getByLabel("Цель C1 к B10").fill("150000");
     await settingsForm.getByLabel("Цель C2 к B10").fill("200000");
@@ -128,18 +171,30 @@ test.describe("smoke", () => {
     const saveResponse = await saveResponsePromise;
     expect(saveResponse.ok()).toBeTruthy();
     await expect(saveButton).toBeEnabled();
-    await expect(settingsForm.getByLabel("Дата старта плана")).toHaveValue("2026-07-01");
+    await expect(settingsForm.getByLabel("Дата старта плана")).toHaveValue(planStartInput);
 
     await openAppPage(page, "/strategy/year", "План года");
-    await expect(page.getByText("Июль 2026").first()).toBeVisible();
-    await expect(page.getByText("Август 2026").first()).toBeVisible();
-    await expect(page.locator("body")).not.toContainText("30.06.2026");
+    await expect(page.getByText(monthYearLabel(planStartDate)).first()).toBeVisible();
+    await expect(page.getByText(monthYearLabel(followingMonth)).first()).toBeVisible();
+    await expect(page.locator("body")).not.toContainText(russianDateLabel(dayBeforePlanStart));
 
     await openAppPage(page, "/strategy/actions", "Неделя");
-    await expect(page.getByText("План ещё не начался").first()).toBeVisible();
-    await expect(page.getByText(/Текущая неделя:/)).not.toBeVisible();
-    await expect(page.getByText("Разрыв недели", { exact: true })).not.toBeVisible();
-    await expect(page.getByText("Разрыв месяца", { exact: true })).not.toBeVisible();
+    const weeklyTakt = page.locator("section").filter({
+      has: page.getByRole("heading", { name: "Недельный такт", exact: true })
+    });
+    await expect(weeklyTakt).toHaveCount(1);
+    await expect(
+      weeklyTakt.getByText("План ещё не начался.", { exact: true })
+    ).toBeVisible();
+    await expect(weeklyTakt.getByText(/Текущая неделя:/)).toHaveCount(0);
+    await expect(weeklyTakt.getByText("Разрыв недели", { exact: true })).toHaveCount(0);
+    await expect(weeklyTakt.getByText("Разрыв месяца", { exact: true })).toHaveCount(0);
+    await expect(
+      page.getByRole("heading", { name: "Гипотезы недели", exact: true })
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Действия дня", exact: true })
+    ).toBeVisible();
     await expectAuthenticatedApp(page);
     await expectNoFatalError(page);
   });

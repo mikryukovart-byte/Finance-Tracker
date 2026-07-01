@@ -10,3 +10,4 @@ prisma/dev.db-journal
 test-results/
 playwright-report/
 e2e/.auth/
+*.tsbuildinfo
