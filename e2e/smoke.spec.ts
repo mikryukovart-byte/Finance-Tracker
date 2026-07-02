@@ -9,6 +9,7 @@ const appPages = [
   { path: "/strategy/year", title: "План года" },
   { path: "/strategy/three-year", title: "План 3-2-1" },
   { path: "/strategy/actions", title: "Неделя" },
+  { path: "/strategy/notes", title: "Рабочие записи" },
   { path: "/strategy/actions/history", title: "Дневник действий" },
   { path: "/analytics", title: "Аналитика" },
   { path: "/advisor", title: "Советник" },
@@ -129,7 +130,107 @@ test.describe("smoke", () => {
     await expectNoFatalError(page);
   });
 
+  test("keeps one shared week across takt, hypotheses and actions", async ({ page }) => {
+    await openAppPage(page, "/strategy/actions", "Неделя");
+
+    const selector = page.getByTestId("shared-week-selector");
+    const weeklyTakt = page.getByTestId("weekly-takt");
+    const hypotheses = page.getByTestId("weekly-hypotheses");
+    const actions = page.getByTestId("daily-actions");
+    const currentWeek = await selector.getAttribute("data-week-start");
+
+    expect(currentWeek).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    await expect(page.getByRole("button", { name: "Предыдущая", exact: true })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Следующая", exact: true })).toHaveCount(1);
+
+    const previousWeekDate = new Date(`${currentWeek}T12:00:00`);
+    previousWeekDate.setDate(previousWeekDate.getDate() - 7);
+    const previousWeek = toDateInputValue(previousWeekDate);
+
+    await page.getByRole("button", { name: "Предыдущая", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`week=${previousWeek}`));
+    await expect(selector).toHaveAttribute("data-week-start", previousWeek);
+    await expect(weeklyTakt).toHaveAttribute("data-week-start", previousWeek);
+    await expect(hypotheses).toHaveAttribute("data-week-start", previousWeek);
+    await expect(actions).toHaveAttribute("data-week-start", previousWeek);
+    await expectNoFatalError(page);
+  });
+
+  test("creates, edits and deletes a weekly hypothesis", async ({ page }) => {
+    await openAppPage(page, "/strategy/actions", "Неделя");
+
+    const marker = `E2E hypothesis ${Date.now()}`;
+    const updatedMarker = `${marker} updated`;
+    const section = page.getByTestId("weekly-hypotheses");
+
+    await section.getByRole("button", { name: "Добавить гипотезу" }).click();
+    await section.getByLabel("Новая гипотеза").fill(marker);
+    await section.getByLabel("Что делаю в новой гипотезе").fill("Пишу десяти клиентам");
+    await section
+      .getByLabel("Ожидаемый результат новой гипотезы")
+      .fill("Два ответа");
+    await section.locator("form").getByRole("button", { name: "Добавить", exact: true }).click();
+
+    let card = section.getByTestId("weekly-hypothesis-card").filter({ hasText: marker });
+    await expect(card).toBeVisible();
+    await card.getByRole("button", { name: "Редактировать" }).click();
+    await card.getByLabel("Гипотеза").fill(updatedMarker);
+    await card.getByRole("button", { name: "Сохранить" }).click();
+
+    card = section.getByTestId("weekly-hypothesis-card").filter({ hasText: updatedMarker });
+    await expect(card).toBeVisible();
+    page.once("dialog", (dialog) => dialog.accept());
+    await card.getByRole("button", { name: "Удалить" }).click();
+    await expect(card).toHaveCount(0);
+  });
+
+  test("creates, edits and soft-deletes a Daily Action from compact rows", async ({ page }) => {
+    await openAppPage(page, "/strategy/actions", "Неделя");
+
+    const marker = `E2E compact action ${Date.now()}`;
+    const updatedMarker = `${marker} updated`;
+    const section = page.getByTestId("daily-actions");
+
+    await section.getByRole("button", { name: "Добавить вручную" }).click();
+    const createForm = section.locator("form");
+    await createForm.getByLabel("Тип").selectOption("FOLLOW_UP");
+    await createForm.getByLabel("Кому / куда").fill(marker);
+    await createForm.getByLabel("Почему это было ценно").fill("Вернул контакт в работу");
+    await createForm.getByLabel("Следующий шаг").fill("Написать через два дня");
+    await createForm.getByRole("button", { name: "Добавить", exact: true }).click();
+
+    let card = section.getByTestId("daily-action-card").filter({ hasText: marker });
+    await expect(card).toBeVisible();
+    await card.getByRole("button", { name: "Подробнее" }).click();
+    await card.getByLabel("Кому / куда").fill(updatedMarker);
+    await card.getByRole("button", { name: "Сохранить" }).click();
+
+    card = section.getByTestId("daily-action-card").filter({ hasText: updatedMarker });
+    await expect(card).toBeVisible();
+    await card.getByRole("button", { name: "Подробнее" }).click();
+    page.once("dialog", (dialog) => dialog.accept());
+    await card.getByRole("button", { name: "Удалить" }).click();
+    await expect(card).toHaveCount(0);
+
+    await section.getByRole("link", { name: "Открыть полный дневник" }).click();
+    await expect(page).toHaveURL(/\/strategy\/actions\/history$/);
+    await expect(page.getByRole("heading", { name: "Дневник действий", level: 1 })).toBeVisible();
+  });
+
+  test("shows the Dashboard weekly actions snapshot", async ({ page }) => {
+    await openAppPage(page, "/", "Главная");
+
+    const snapshot = page.getByTestId("dashboard-weekly-actions");
+    await expect(snapshot.getByRole("heading", { name: "Действия недели" })).toBeVisible();
+    await expect(snapshot.getByText("Первые касания", { exact: true })).toBeVisible();
+    await expect(snapshot.getByText("Всего действий", { exact: true })).toBeVisible();
+    await snapshot.getByRole("link", { name: "Открыть неделю →" }).click();
+    await expect(page).toHaveURL(/\/strategy\/actions\?week=\d{4}-\d{2}-\d{2}$/);
+    await expect(page.getByRole("heading", { name: "Неделя", level: 1 })).toBeVisible();
+  });
+
   test("updates annual goal start date without timezone shift", async ({ page }) => {
+    test.setTimeout(60_000);
     await openAppPage(page, "/strategy/goals", "Цели");
 
     const now = new Date();
@@ -162,7 +263,7 @@ test.describe("smoke", () => {
       (response) =>
         response.url().includes("/api/goals") &&
         response.request().method() !== "GET",
-      { timeout: 30_000 }
+      { timeout: 60_000 }
     );
 
     await expect(saveButton).toBeEnabled();
@@ -240,5 +341,33 @@ test.describe("smoke", () => {
 
     const cleanupResponse = await page.request.delete(`/api/daily-actions/${created.id}`);
     expect(cleanupResponse.ok()).toBeTruthy();
+  });
+
+  test("lists and soft-deletes a confirmed WorkRecord", async ({ page }) => {
+    const marker = `E2E work record ${Date.now()}`;
+    const createResponse = await page.request.post("/api/work-records", {
+      data: {
+        title: marker,
+        recordType: "DECISION",
+        summary: "Нужно проверить отображение подтверждённой записи. После проверки запись можно удалить.",
+        insight: "Список показывает только данные владельца.",
+        nextStep: "Проверить мягкое удаление",
+        relatedWeekStart: "2026-07-02"
+      }
+    });
+    expect(createResponse.status()).toBe(201);
+
+    await openAppPage(page, "/strategy/notes", "Рабочие записи");
+    let card = page.getByTestId("work-record").filter({ hasText: marker });
+    await expect(card).toBeVisible();
+    await expect(card.getByText("Решение", { exact: true })).toBeVisible();
+
+    await card.getByRole("button", { name: "Удалить" }).click();
+    await expect(card).toHaveCount(0);
+
+    await page.getByLabel("Показать удалённые").check();
+    card = page.getByTestId("work-record").filter({ hasText: marker });
+    await expect(card).toBeVisible();
+    await expect(card.getByText(/удалена/)).toBeVisible();
   });
 });

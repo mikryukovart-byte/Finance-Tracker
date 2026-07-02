@@ -1,7 +1,7 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, Plus, Trash2 } from "lucide-react";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import { EmptyState } from "@/components/empty-state";
 import {
@@ -10,7 +10,6 @@ import {
   readClientCache,
   readErrorMessage
 } from "@/lib/client-api";
-import { formatDate, toDateInputValue } from "@/lib/format";
 import type { WeeklyHypothesis, WeeklyHypothesisStatus } from "@/types/finance";
 
 const statusLabels: Record<WeeklyHypothesisStatus, string> = {
@@ -51,16 +50,6 @@ const initialForm: HypothesisForm = {
   status: "PLANNED"
 };
 
-function startOfWeek(date = new Date()) {
-  const day = date.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + diff);
-}
-
-function addDays(date: Date, days: number) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
-}
-
 function hypothesisCacheKey(weekStart: string) {
   return `weekly-hypotheses:${weekStart}`;
 }
@@ -88,10 +77,9 @@ function payloadFromForm(form: HypothesisForm, weekStartDate: string) {
   };
 }
 
-export function WeeklyHypotheses() {
-  const [weekStart, setWeekStart] = useState(() => toDateInputValue(startOfWeek()));
+export function WeeklyHypotheses({ weekStart }: { weekStart: string }) {
   const [data, setData] = useState<HypothesesResponse | null>(() =>
-    readClientCache<HypothesesResponse>(hypothesisCacheKey(toDateInputValue(startOfWeek())))
+    readClientCache<HypothesesResponse>(hypothesisCacheKey(weekStart))
   );
   const [isExpanded, setIsExpanded] = useState(() => {
     if (typeof window === "undefined") {
@@ -100,6 +88,8 @@ export function WeeklyHypotheses() {
 
     return window.localStorage.getItem("strategyHypothesesCollapsed") !== "true";
   });
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, HypothesisForm>>({});
   const [form, setForm] = useState(initialForm);
   const [loading, setLoading] = useState(() => !data);
@@ -107,14 +97,6 @@ export function WeeklyHypotheses() {
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-
-  const weekLabel = useMemo(() => {
-    if (!data) {
-      return "";
-    }
-
-    return `${formatDate(data.weekStartDate)} — ${formatDate(data.weekEndDate)}`;
-  }, [data]);
   const hypothesisCount = data?.hypotheses.length ?? 0;
 
   const loadHypotheses = useCallback(async (force = false) => {
@@ -153,6 +135,9 @@ export function WeeklyHypotheses() {
   }, [weekStart]);
 
   useEffect(() => {
+    setIsCreateOpen(false);
+    setEditingId(null);
+    setForm(initialForm);
     loadHypotheses();
   }, [loadHypotheses]);
 
@@ -160,8 +145,19 @@ export function WeeklyHypotheses() {
     window.localStorage.setItem("strategyHypothesesCollapsed", String(!isExpanded));
   }, [isExpanded]);
 
-  function shiftWeek(days: number) {
-    setWeekStart((current) => toDateInputValue(addDays(new Date(`${current}T12:00:00`), days)));
+  function openCreateForm() {
+    setIsExpanded(true);
+    setEditingId(null);
+    setIsCreateOpen(true);
+  }
+
+  function openEditForm(hypothesis: WeeklyHypothesis) {
+    setIsCreateOpen(false);
+    setDrafts((current) => ({
+      ...current,
+      [hypothesis.id]: normalizeForm(hypothesis)
+    }));
+    setEditingId(hypothesis.id);
   }
 
   async function createHypothesis(event: FormEvent<HTMLFormElement>) {
@@ -188,8 +184,10 @@ export function WeeklyHypotheses() {
       }
 
       invalidateClientCache("weekly-hypotheses:");
+      invalidateClientCache("daily-actions:");
       invalidateClientCache("advisor:");
       setForm(initialForm);
+      setIsCreateOpen(false);
       setMessage("Гипотеза добавлена");
       await loadHypotheses(true);
     } catch (err) {
@@ -222,7 +220,9 @@ export function WeeklyHypotheses() {
       }
 
       invalidateClientCache("weekly-hypotheses:");
+      invalidateClientCache("daily-actions:");
       invalidateClientCache("advisor:");
+      setEditingId(null);
       setMessage("Гипотеза сохранена");
       await loadHypotheses(true);
     } catch (err) {
@@ -251,7 +251,9 @@ export function WeeklyHypotheses() {
       }
 
       invalidateClientCache("weekly-hypotheses:");
+      invalidateClientCache("daily-actions:");
       invalidateClientCache("advisor:");
+      setEditingId(null);
       setMessage("Гипотеза удалена");
       await loadHypotheses(true);
     } catch (err) {
@@ -262,13 +264,18 @@ export function WeeklyHypotheses() {
   }
 
   return (
-    <section className="card p-4 sm:p-5">
+    <section
+      className="card p-4 sm:p-5"
+      data-testid="weekly-hypotheses"
+      data-week-start={weekStart}
+    >
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h2 className="text-lg font-semibold text-ink">Гипотезы недели</h2>
           <p className="mt-1 text-sm text-muted">
-            Правильная гипотеза — та, которую можно проверить за одну неделю.
+            Проверяемые идеи и конкретные действия на выбранную неделю.
           </p>
+          <p className="mt-2 text-sm text-muted">Гипотез: {hypothesisCount}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -278,176 +285,262 @@ export function WeeklyHypotheses() {
           >
             {isExpanded ? "Скрыть гипотезы" : "Показать гипотезы"}
           </button>
-          <button type="button" className="btn-secondary min-h-10 px-3" onClick={() => shiftWeek(-7)}>
-            <ChevronLeft className="h-4 w-4" aria-hidden="true" />
-            Предыдущая
-          </button>
-          <input
-            className="field min-h-10 w-40"
-            type="date"
-            value={weekStart}
-            onChange={(event) => setWeekStart(toDateInputValue(startOfWeek(new Date(`${event.target.value}T12:00:00`))))}
-          />
-          <button type="button" className="btn-secondary min-h-10 px-3" onClick={() => shiftWeek(7)}>
-            Следующая
-            <ChevronRight className="h-4 w-4" aria-hidden="true" />
+          <button
+            type="button"
+            className="btn-primary min-h-10 px-3"
+            onClick={openCreateForm}
+          >
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            Добавить гипотезу
           </button>
         </div>
       </div>
 
-      <div className="mb-4 text-sm text-muted">
-        {weekLabel ? `Неделя: ${weekLabel}. ` : ""}
-        Гипотез недели: {hypothesisCount}.
-      </div>
       {message ? <div className="mb-3 text-sm text-profit">{message}</div> : null}
       {error ? <div className="mb-3 text-sm text-loss">{error}</div> : null}
 
       {isExpanded ? (
         <>
-          <form className="mb-5 grid gap-3 lg:grid-cols-[1fr_1fr_1fr_auto]" onSubmit={createHypothesis}>
-        <input
-          className="field"
-          value={form.title}
-          placeholder="20 холодных сообщений владельцам брендов"
-          onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
-        />
-        <input
-          className="field"
-          value={form.actionPlan}
-          placeholder="Что делаю"
-          onChange={(event) => setForm((current) => ({ ...current, actionPlan: event.target.value }))}
-        />
-        <input
-          className="field"
-          value={form.expectedResult}
-          placeholder="Ожидаемый результат"
-          onChange={(event) => setForm((current) => ({ ...current, expectedResult: event.target.value }))}
-        />
-        <button type="submit" className="btn-primary min-h-11 justify-center" disabled={creating}>
-          <Plus className="h-4 w-4" aria-hidden="true" />
-          {creating ? "Добавляем" : "Добавить"}
-        </button>
-          </form>
+          {isCreateOpen ? (
+            <form
+              className="mb-5 rounded-md border border-line bg-soft/20 p-3"
+              onSubmit={createHypothesis}
+            >
+              <div className="grid gap-3 lg:grid-cols-[1fr_1fr_1fr]">
+                <input
+                  className="field"
+                  aria-label="Новая гипотеза"
+                  value={form.title}
+                  placeholder="20 холодных сообщений владельцам брендов"
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, title: event.target.value }))
+                  }
+                />
+                <input
+                  className="field"
+                  aria-label="Что делаю в новой гипотезе"
+                  value={form.actionPlan}
+                  placeholder="Что делаю"
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, actionPlan: event.target.value }))
+                  }
+                />
+                <input
+                  className="field"
+                  aria-label="Ожидаемый результат новой гипотезы"
+                  value={form.expectedResult}
+                  placeholder="Ожидаемый результат"
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      expectedResult: event.target.value
+                    }))
+                  }
+                />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="submit"
+                  className="btn-primary min-h-10"
+                  disabled={creating}
+                >
+                  {creating ? "Добавляем" : "Добавить"}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary min-h-10"
+                  onClick={() => {
+                    setForm(initialForm);
+                    setIsCreateOpen(false);
+                  }}
+                >
+                  Отмена
+                </button>
+              </div>
+            </form>
+          ) : null}
 
-          {loading && data ? <p className="mb-3 text-sm text-muted">Обновляем гипотезы…</p> : null}
+          {loading && data ? (
+            <p className="mb-3 text-sm text-muted">Обновляем гипотезы…</p>
+          ) : null}
           {loading && !data ? (
             <p className="text-sm text-muted">Загрузка...</p>
           ) : data?.hypotheses.length ? (
             <div className="grid gap-3">
               {data.hypotheses.map((hypothesis) => {
                 const draft = drafts[hypothesis.id] ?? normalizeForm(hypothesis);
+                const isEditing = editingId === hypothesis.id;
 
                 return (
-                  <div key={hypothesis.id} className="rounded-md border border-line p-3">
-                <div className="grid gap-3 lg:grid-cols-2">
-                  <label className="text-sm">
-                    <span className="field-label">Гипотеза</span>
-                    <input
-                      className="field mt-1"
-                      value={draft.title}
-                      onChange={(event) =>
-                        setDrafts((current) => ({
-                          ...current,
-                          [hypothesis.id]: { ...draft, title: event.target.value }
-                        }))
-                      }
-                    />
-                  </label>
-                  <label className="text-sm">
-                    <span className="field-label">Что делаю</span>
-                    <input
-                      className="field mt-1"
-                      value={draft.actionPlan}
-                      onChange={(event) =>
-                        setDrafts((current) => ({
-                          ...current,
-                          [hypothesis.id]: { ...draft, actionPlan: event.target.value }
-                        }))
-                      }
-                    />
-                  </label>
-                  <label className="text-sm">
-                    <span className="field-label">Ожидаемый результат</span>
-                    <input
-                      className="field mt-1"
-                      value={draft.expectedResult}
-                      onChange={(event) =>
-                        setDrafts((current) => ({
-                          ...current,
-                          [hypothesis.id]: { ...draft, expectedResult: event.target.value }
-                        }))
-                      }
-                    />
-                  </label>
-                  <label className="text-sm">
-                    <span className="field-label">Факт</span>
-                    <input
-                      className="field mt-1"
-                      value={draft.actualResult}
-                      onChange={(event) =>
-                        setDrafts((current) => ({
-                          ...current,
-                          [hypothesis.id]: { ...draft, actualResult: event.target.value }
-                        }))
-                      }
-                    />
-                  </label>
-                  <label className="text-sm">
-                    <span className="field-label">Вывод</span>
-                    <input
-                      className="field mt-1"
-                      value={draft.conclusion}
-                      onChange={(event) =>
-                        setDrafts((current) => ({
-                          ...current,
-                          [hypothesis.id]: { ...draft, conclusion: event.target.value }
-                        }))
-                      }
-                    />
-                  </label>
-                  <label className="text-sm">
-                    <span className="field-label">Статус</span>
-                    <select
-                      className="field mt-1"
-                      value={draft.status}
-                      onChange={(event) =>
-                        setDrafts((current) => ({
-                          ...current,
-                          [hypothesis.id]: {
-                            ...draft,
-                            status: event.target.value as WeeklyHypothesisStatus
+                  <article
+                    key={hypothesis.id}
+                    className="rounded-md border border-line p-3"
+                    data-testid="weekly-hypothesis-card"
+                  >
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="font-medium text-ink">{hypothesis.title}</div>
+                        <div className="mt-1 text-xs text-muted">
+                          {statusLabels[hypothesis.status]}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="btn-secondary min-h-9 px-3"
+                          onClick={() =>
+                            isEditing ? setEditingId(null) : openEditForm(hypothesis)
                           }
-                        }))
-                      }
-                    >
-                      {statusOptions.map(([value, label]) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="btn-secondary min-h-10"
-                    onClick={() => saveHypothesis(hypothesis)}
-                    disabled={savingId === hypothesis.id}
-                  >
-                    {savingId === hypothesis.id ? "Сохраняем" : "Сохранить"}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-danger min-h-10"
-                    onClick={() => deleteHypothesis(hypothesis)}
-                    disabled={savingId === hypothesis.id}
-                  >
-                    <Trash2 className="h-4 w-4" aria-hidden="true" />
-                    Удалить
-                  </button>
-                </div>
-                  </div>
+                        >
+                          <Pencil className="h-4 w-4" aria-hidden="true" />
+                          {isEditing ? "Закрыть" : "Редактировать"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-danger min-h-9 px-3"
+                          onClick={() => deleteHypothesis(hypothesis)}
+                          disabled={savingId === hypothesis.id}
+                        >
+                          <Trash2 className="h-4 w-4" aria-hidden="true" />
+                          Удалить
+                        </button>
+                      </div>
+                    </div>
+
+                    {!isEditing ? (
+                      <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+                        <p className="text-muted">
+                          <span className="text-ink">Что делаю:</span>{" "}
+                          {hypothesis.actionPlan}
+                        </p>
+                        <p className="text-muted">
+                          <span className="text-ink">Ожидаемый результат:</span>{" "}
+                          {hypothesis.expectedResult || "Не указан"}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="mt-3 border-t border-line pt-3">
+                        <div className="grid gap-3 lg:grid-cols-2">
+                          <label className="text-sm">
+                            <span className="field-label">Гипотеза</span>
+                            <input
+                              className="field mt-1"
+                              value={draft.title}
+                              onChange={(event) =>
+                                setDrafts((current) => ({
+                                  ...current,
+                                  [hypothesis.id]: { ...draft, title: event.target.value }
+                                }))
+                              }
+                            />
+                          </label>
+                          <label className="text-sm">
+                            <span className="field-label">Что делаю</span>
+                            <input
+                              className="field mt-1"
+                              value={draft.actionPlan}
+                              onChange={(event) =>
+                                setDrafts((current) => ({
+                                  ...current,
+                                  [hypothesis.id]: {
+                                    ...draft,
+                                    actionPlan: event.target.value
+                                  }
+                                }))
+                              }
+                            />
+                          </label>
+                          <label className="text-sm">
+                            <span className="field-label">Ожидаемый результат</span>
+                            <input
+                              className="field mt-1"
+                              value={draft.expectedResult}
+                              onChange={(event) =>
+                                setDrafts((current) => ({
+                                  ...current,
+                                  [hypothesis.id]: {
+                                    ...draft,
+                                    expectedResult: event.target.value
+                                  }
+                                }))
+                              }
+                            />
+                          </label>
+                          <label className="text-sm">
+                            <span className="field-label">Факт</span>
+                            <input
+                              className="field mt-1"
+                              value={draft.actualResult}
+                              onChange={(event) =>
+                                setDrafts((current) => ({
+                                  ...current,
+                                  [hypothesis.id]: {
+                                    ...draft,
+                                    actualResult: event.target.value
+                                  }
+                                }))
+                              }
+                            />
+                          </label>
+                          <label className="text-sm">
+                            <span className="field-label">Вывод</span>
+                            <input
+                              className="field mt-1"
+                              value={draft.conclusion}
+                              onChange={(event) =>
+                                setDrafts((current) => ({
+                                  ...current,
+                                  [hypothesis.id]: {
+                                    ...draft,
+                                    conclusion: event.target.value
+                                  }
+                                }))
+                              }
+                            />
+                          </label>
+                          <label className="text-sm">
+                            <span className="field-label">Статус</span>
+                            <select
+                              className="field mt-1"
+                              value={draft.status}
+                              onChange={(event) =>
+                                setDrafts((current) => ({
+                                  ...current,
+                                  [hypothesis.id]: {
+                                    ...draft,
+                                    status: event.target.value as WeeklyHypothesisStatus
+                                  }
+                                }))
+                              }
+                            >
+                              {statusOptions.map(([value, label]) => (
+                                <option key={value} value={value}>
+                                  {label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            className="btn-secondary min-h-10"
+                            onClick={() => saveHypothesis(hypothesis)}
+                            disabled={savingId === hypothesis.id}
+                          >
+                            {savingId === hypothesis.id ? "Сохраняем" : "Сохранить"}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-secondary min-h-10"
+                            onClick={() => setEditingId(null)}
+                          >
+                            Отмена
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </article>
                 );
               })}
             </div>
@@ -457,9 +550,7 @@ export function WeeklyHypotheses() {
         </>
       ) : (
         <div className="rounded-md border border-line bg-soft/20 px-3 py-3 text-sm text-muted">
-          {weekLabel ? `Неделя: ${weekLabel}. ` : ""}
-          Гипотез недели: {hypothesisCount}.
-          {loading ? " Загружаем данные..." : ""}
+          Гипотез: {hypothesisCount}.{loading ? " Загружаем данные..." : ""}
         </div>
       )}
     </section>

@@ -10,6 +10,7 @@ import {
   normalizeGoalYear,
   syncLinearGoalRows
 } from "@/lib/goals";
+import { parseDateInput, startOfWeek } from "@/lib/date-ranges";
 import { createApiTimer } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { firstZodError } from "@/lib/validation";
@@ -243,9 +244,11 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const year = normalizeGoalYear(url.searchParams.get("year"));
+  const requestedWeek = parseDateInput(url.searchParams.get("week"));
 
   try {
     const payload = await getGoalsPayload(auth.userId, year, {
+      weekStartDate: requestedWeek ? startOfWeek(requestedWeek) : undefined,
       onTiming(label, ms) {
         timer.set(label, ms);
       }

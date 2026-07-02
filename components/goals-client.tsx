@@ -2,6 +2,8 @@
 
 import {
   CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   Gauge,
   Save,
   Sigma,
@@ -9,6 +11,7 @@ import {
   TrendingUp
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
@@ -24,6 +27,12 @@ import {
   setClientCache
 } from "@/lib/client-api";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
+import {
+  normalizeWeekStart,
+  parseDateOnly,
+  shiftWeekStart,
+  weekEndDate
+} from "@/lib/week";
 import type {
   AnnualGoalRow,
   GoalScenarioKey,
@@ -36,6 +45,7 @@ type StrategyView = "hub" | "goals" | "year" | "three-year" | "actions";
 
 type GoalsClientProps = {
   view?: StrategyView;
+  initialWeekStart?: string;
 };
 
 const monthNames = [
@@ -53,8 +63,26 @@ const monthNames = [
   "Декабрь"
 ];
 
-function goalsCacheKey(year: number) {
-  return `goals:${year}`;
+function goalsCacheKey(year: number, weekStart?: string) {
+  return weekStart ? `goals:${year}:week:${weekStart}` : `goals:${year}`;
+}
+
+function sharedWeekLabel(weekStart: string) {
+  const start = parseDateOnly(weekStart) ?? new Date();
+  const end = weekEndDate(weekStart);
+  const startLabel = new Intl.DateTimeFormat("ru-RU", {
+    day: "numeric",
+    month: "long"
+  }).format(start);
+  const endLabel = new Intl.DateTimeFormat("ru-RU", {
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  })
+    .format(end)
+    .replace(/\s*г\.$/, "");
+
+  return `${startLabel} — ${endLabel}`;
 }
 
 function rowIndex(row: AnnualGoalRow) {
@@ -276,12 +304,19 @@ function findCurrentCycleState(
   };
 }
 
-export function GoalsClient({ view = "hub" }: GoalsClientProps) {
+export function GoalsClient({ view = "hub", initialWeekStart }: GoalsClientProps) {
+  const router = useRouter();
   const now = new Date();
   const currentYear = now.getFullYear();
+  const selectedWeekStart = normalizeWeekStart(initialWeekStart, now);
+  const selectedWeekYear = parseDateOnly(selectedWeekStart)?.getFullYear() ?? currentYear;
+  const initialDataKey = goalsCacheKey(
+    view === "actions" ? selectedWeekYear : currentYear,
+    view === "actions" ? selectedWeekStart : undefined
+  );
   const [year, setYear] = useState(currentYear);
   const [data, setData] = useState<GoalsResponse | null>(() =>
-    readClientCache<GoalsResponse>(goalsCacheKey(currentYear))
+    readClientCache<GoalsResponse>(initialDataKey)
   );
   const [loading, setLoading] = useState(() => !data);
   const [saving, setSaving] = useState(false);
@@ -300,10 +335,13 @@ export function GoalsClient({ view = "hub" }: GoalsClientProps) {
     c3Target: 0
   });
 
+  const effectiveYear = view === "actions" ? selectedWeekYear : year;
+
   useEffect(() => {
     async function loadGoals() {
       setMessage("");
-      const key = goalsCacheKey(year);
+      const weekQuery = view === "actions" ? selectedWeekStart : undefined;
+      const key = goalsCacheKey(effectiveYear, weekQuery);
       const cached = readClientCache<GoalsResponse>(key);
 
       if (cached) {
@@ -315,7 +353,7 @@ export function GoalsClient({ view = "hub" }: GoalsClientProps) {
       try {
         const next = await fetchJsonCached<GoalsResponse>(
           key,
-          `/api/goals?year=${year}`,
+          `/api/goals?year=${effectiveYear}${weekQuery ? `&week=${weekQuery}` : ""}`,
           { ttlMs: 12_000 }
         );
         setData(next);
@@ -328,7 +366,13 @@ export function GoalsClient({ view = "hub" }: GoalsClientProps) {
     }
 
     loadGoals();
-  }, [year]);
+  }, [effectiveYear, selectedWeekStart, view]);
+
+  useEffect(() => {
+    if (view === "actions" && initialWeekStart !== selectedWeekStart) {
+      router.replace(`/strategy/actions?week=${selectedWeekStart}`, { scroll: false });
+    }
+  }, [initialWeekStart, router, selectedWeekStart, view]);
 
   useEffect(() => {
     if (!data) {
@@ -429,6 +473,11 @@ export function GoalsClient({ view = "hub" }: GoalsClientProps) {
   function cacheGoals(next: GoalsResponse) {
     setData(next);
     setClientCache(goalsCacheKey(next.plan.year), next, 12_000);
+  }
+
+  function navigateWeek(weeks: number) {
+    const nextWeek = shiftWeekStart(selectedWeekStart, weeks);
+    router.push(`/strategy/actions?week=${nextWeek}`, { scroll: false });
   }
 
   function updateRowLocal(id: string, patch: Partial<AnnualGoalRow>) {
@@ -766,6 +815,18 @@ export function GoalsClient({ view = "hub" }: GoalsClientProps) {
                     <span className="font-medium text-ink">{formatCurrencyInline(weeklyTarget)}</span>
                   </div>
                 </StrategyNavCard>
+
+                <StrategyNavCard
+                  href="/strategy/notes"
+                  title="Рабочие записи"
+                  description="Заметки, решения, идеи и риски из Telegram."
+                >
+                  <div className="flex justify-between gap-3">
+                    <span className="text-muted">Формат</span>
+                    <span className="font-medium text-ink">Короткая суть</span>
+                  </div>
+                  <p className="text-xs text-muted">Сохраняются только после подтверждения</p>
+                </StrategyNavCard>
               </div>
             </>
           ) : null}
@@ -986,7 +1047,39 @@ export function GoalsClient({ view = "hub" }: GoalsClientProps) {
 
           {showWeeklyActions ? (
           <>
-          <section className="card p-4 sm:p-5">
+          <section
+            className="card p-4 sm:p-5"
+            data-testid="shared-week-selector"
+            data-week-start={selectedWeekStart}
+          >
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <button
+                type="button"
+                className="btn-secondary min-h-10 px-3"
+                onClick={() => navigateWeek(-1)}
+              >
+                <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+                Предыдущая
+              </button>
+              <div className="text-center text-sm font-medium text-ink">
+                {sharedWeekLabel(selectedWeekStart)}
+              </div>
+              <button
+                type="button"
+                className="btn-secondary min-h-10 px-3"
+                onClick={() => navigateWeek(1)}
+              >
+                Следующая
+                <ChevronRight className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+          </section>
+
+          <section
+            className="card p-4 sm:p-5"
+            data-testid="weekly-takt"
+            data-week-start={selectedWeekStart}
+          >
             <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-ink">Недельный такт</h2>
@@ -1135,9 +1228,20 @@ export function GoalsClient({ view = "hub" }: GoalsClientProps) {
             )}
           </section>
 
-          <WeeklyHypotheses />
+          <WeeklyHypotheses weekStart={selectedWeekStart} />
 
-          <DailyActions />
+          <DailyActions
+            weekStart={selectedWeekStart}
+            onWeekChange={(nextWeek) =>
+              router.push(`/strategy/actions?week=${nextWeek}`, { scroll: false })
+            }
+          />
+          <Link
+            href="/strategy/notes"
+            className="inline-flex text-sm text-muted transition hover:text-ink"
+          >
+            Рабочие записи →
+          </Link>
           </>
           ) : null}
 

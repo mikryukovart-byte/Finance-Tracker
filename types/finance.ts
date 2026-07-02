@@ -630,6 +630,31 @@ export type DailyActionLog = {
   updatedAt?: string;
 };
 
+export type WorkRecordType =
+  | "NOTE"
+  | "DECISION"
+  | "RISK"
+  | "IDEA"
+  | "DAILY_REFLECTION"
+  | "WEEKLY_PLAN_DRAFT"
+  | "HYPOTHESIS_DRAFT"
+  | "ACTION_CANDIDATE";
+
+export type WorkRecord = {
+  id: string;
+  title: string;
+  recordType: WorkRecordType;
+  summary: string;
+  insight: string | null;
+  risk: string | null;
+  nextStep: string | null;
+  relatedWeekStart: string | null;
+  source: "TELEGRAM_TEXT" | "TELEGRAM_VOICE" | "WEB_MANUAL";
+  deletedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type CategoryBreakdownItem = {
     categoryId: string;
     name: string;

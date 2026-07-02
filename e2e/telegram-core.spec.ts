@@ -9,6 +9,7 @@ import {
   processTelegramUpdate,
   type TelegramWebhookDependencies
 } from "@/lib/telegram-webhook-core";
+import type { TelegramWorkRecord } from "@/lib/telegram-work-records";
 
 const action: TelegramDailyAction = {
   type: "WARM_CONTACT",
@@ -19,15 +20,32 @@ const action: TelegramDailyAction = {
   note: "Написал директору Oceaniq"
 };
 
+const workRecord: TelegramWorkRecord = {
+  title: "Сфокусироваться на исходящих",
+  recordType: "DECISION",
+  summary: "Входящих обращений пока нет. Ближайшие три дня приоритетом будут исходящие сообщения.",
+  insight: "Сайт сейчас не является главным ограничением.",
+  risk: null,
+  nextStep: "Написать потенциальным клиентам",
+  relatedWeekStart: "2026-06-29",
+  source: "TELEGRAM_TEXT"
+};
+
 function createDependencies(
   overrides: Partial<TelegramWebhookDependencies> = {}
 ): TelegramWebhookDependencies {
   return {
+    classifyInput: async () => "ACTION",
     parseAction: async () => action,
+    parseWorkRecord: async () => workRecord,
     transcribeVoice: async () => action.note,
     createPending: async () => "pending-id",
+    createPendingWorkRecord: async () => "work-pending-id",
     cancelPending: async () => true,
+    cancelPendingWorkRecord: async () => true,
     savePending: async () => ({ type: action.type, target: action.target }),
+    savePendingWorkRecord: async () => true,
+    convertPendingWorkRecord: async () => ({ pendingId: "action-pending-id", action }),
     sendMessage: async () => ({}),
     answerCallback: async () => ({}),
     ...overrides
@@ -146,5 +164,163 @@ test.describe("Telegram webhook core", () => {
 
     expect(cancelCount).toBe(1);
     expect(saveCount).toBe(0);
+  });
+
+  test("creates a WorkRecord confirmation from text without entering the action flow", async () => {
+    const messages: Array<{ text: string; replyMarkup?: unknown }> = [];
+    let parsedAction = false;
+    let parsedSource = "";
+
+    await processTelegramUpdate(
+      {
+        message: {
+          chat: { id: "allowed-chat" },
+          text: "Думаю делать сайт, но ближайшие три дня лучше писать людям"
+        }
+      },
+      "allowed-chat",
+      createDependencies({
+        classifyInput: async () => "WORK_RECORD",
+        parseAction: async () => {
+          parsedAction = true;
+          return action;
+        },
+        parseWorkRecord: async (_text, source) => {
+          parsedSource = source;
+          return workRecord;
+        },
+        sendMessage: async (_chatId, text, replyMarkup) => {
+          messages.push({ text, replyMarkup });
+          return {};
+        }
+      })
+    );
+
+    expect(parsedAction).toBeFalsy();
+    expect(parsedSource).toBe("TELEGRAM_TEXT");
+    expect(messages[0].text).toContain("Рабочая запись");
+    expect(messages[0].text).toContain(workRecord.title);
+    expect(JSON.stringify(messages[0].replyMarkup)).toContain("work_save:work-pending-id");
+    expect(JSON.stringify(messages[0].replyMarkup)).toContain("work_convert:work-pending-id");
+  });
+
+  test("saving a WorkRecord does not save a Daily Action", async () => {
+    let workSaveCount = 0;
+    let actionSaveCount = 0;
+    const messages: string[] = [];
+
+    await processTelegramUpdate(
+      {
+        callback_query: {
+          id: "work-save-callback",
+          data: "work_save:work-pending-id",
+          message: { chat: { id: "allowed-chat" } }
+        }
+      },
+      "allowed-chat",
+      createDependencies({
+        savePendingWorkRecord: async () => {
+          workSaveCount += 1;
+          return true;
+        },
+        savePending: async () => {
+          actionSaveCount += 1;
+          return { type: action.type, target: action.target };
+        },
+        sendMessage: async (_chatId, text) => {
+          messages.push(text);
+          return {};
+        }
+      })
+    );
+
+    expect(workSaveCount).toBe(1);
+    expect(actionSaveCount).toBe(0);
+    expect(messages).toContain("Рабочая запись сохранена.");
+  });
+
+  test("conversion requires the existing second action confirmation", async () => {
+    let actionSaveCount = 0;
+    const messages: string[] = [];
+    const dependencies = createDependencies({
+      savePending: async () => {
+        actionSaveCount += 1;
+        return { type: action.type, target: action.target };
+      },
+      sendMessage: async (_chatId, text) => {
+        messages.push(text);
+        return {};
+      }
+    });
+
+    await processTelegramUpdate(
+      {
+        callback_query: {
+          id: "work-convert-callback",
+          data: "work_convert:work-pending-id",
+          message: { chat: { id: "allowed-chat" } }
+        }
+      },
+      "allowed-chat",
+      dependencies
+    );
+
+    expect(actionSaveCount).toBe(0);
+    expect(messages.some((message) => message.startsWith("Я понял так:"))).toBeTruthy();
+
+    await processTelegramUpdate(
+      {
+        callback_query: {
+          id: "action-save-callback",
+          data: "save:action-pending-id",
+          message: { chat: { id: "allowed-chat" } }
+        }
+      },
+      "allowed-chat",
+      dependencies
+    );
+
+    expect(actionSaveCount).toBe(1);
+  });
+
+  test("canceling a WorkRecord saves neither records nor actions", async () => {
+    let cancelCount = 0;
+    let workSaveCount = 0;
+    let actionSaveCount = 0;
+    const messages: string[] = [];
+
+    await processTelegramUpdate(
+      {
+        callback_query: {
+          id: "work-cancel-callback",
+          data: "work_cancel:work-pending-id",
+          message: { chat: { id: "allowed-chat" } }
+        }
+      },
+      "allowed-chat",
+      createDependencies({
+        cancelPendingWorkRecord: async () => {
+          cancelCount += 1;
+          return true;
+        },
+        savePendingWorkRecord: async () => {
+          workSaveCount += 1;
+          return true;
+        },
+        savePending: async () => {
+          actionSaveCount += 1;
+          return { type: action.type, target: action.target };
+        },
+        sendMessage: async (_chatId, text) => {
+          messages.push(text);
+          return {};
+        }
+      })
+    );
+
+    expect(cancelCount).toBe(1);
+    expect(workSaveCount).toBe(0);
+    expect(actionSaveCount).toBe(0);
+    expect(messages).toContain("Не сохраняю.");
   });
 });

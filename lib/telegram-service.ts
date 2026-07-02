@@ -4,9 +4,16 @@ import { downloadTelegramVoice, sendTelegramMessage, answerTelegramCallback } fr
 import {
   parseTelegramDailyAction,
   telegramDailyActionSchema,
+  todayInAmsterdam,
   transcribeTelegramVoice,
   type TelegramDailyAction
 } from "@/lib/telegram-daily-actions";
+import {
+  classifyTelegramWorkInput,
+  parseTelegramWorkRecord,
+  telegramWorkRecordSchema,
+  type TelegramWorkRecord
+} from "@/lib/telegram-work-records";
 import { parseDateInput, startOfWeek } from "@/lib/date-ranges";
 import { prisma } from "@/lib/prisma";
 import type { TelegramRuntimeConfig } from "@/lib/telegram-auth";
@@ -34,8 +41,39 @@ async function createPending(chatId: string, action: TelegramDailyAction) {
   return pending.id;
 }
 
+async function removeExpiredPendingWorkRecords(now = new Date()) {
+  await prisma.telegramPendingWorkRecord.deleteMany({
+    where: { expiresAt: { lte: now } }
+  });
+}
+
+async function createPendingWorkRecord(chatId: string, record: TelegramWorkRecord) {
+  const now = new Date();
+  await removeExpiredPendingWorkRecords(now);
+  const pending = await prisma.telegramPendingWorkRecord.create({
+    data: {
+      chatId,
+      payload: record as Prisma.InputJsonObject,
+      expiresAt: new Date(now.getTime() + pendingLifetimeMs)
+    },
+    select: { id: true }
+  });
+  return pending.id;
+}
+
 async function cancelPending(chatId: string, pendingId: string) {
   const result = await prisma.telegramPendingAction.deleteMany({
+    where: {
+      id: pendingId,
+      chatId,
+      expiresAt: { gt: new Date() }
+    }
+  });
+  return result.count === 1;
+}
+
+async function cancelPendingWorkRecord(chatId: string, pendingId: string) {
+  const result = await prisma.telegramPendingWorkRecord.deleteMany({
     where: {
       id: pendingId,
       chatId,
@@ -104,19 +142,132 @@ async function savePending(
   });
 }
 
+async function savePendingWorkRecord(
+  chatId: string,
+  pendingId: string,
+  trackerUserId: string
+) {
+  return prisma.$transaction(async (transaction) => {
+    const pending = await transaction.telegramPendingWorkRecord.findFirst({
+      where: {
+        id: pendingId,
+        chatId,
+        expiresAt: { gt: new Date() }
+      },
+      select: { payload: true }
+    });
+
+    if (!pending) {
+      return false;
+    }
+
+    const payload = telegramWorkRecordSchema.safeParse(pending.payload);
+    const relatedWeekStart = payload.success && payload.data.relatedWeekStart
+      ? parseDateInput(payload.data.relatedWeekStart)
+      : null;
+
+    if (!payload.success || (payload.data.relatedWeekStart && !relatedWeekStart)) {
+      await transaction.telegramPendingWorkRecord.deleteMany({
+        where: { id: pendingId, chatId }
+      });
+      return false;
+    }
+
+    const claimed = await transaction.telegramPendingWorkRecord.deleteMany({
+      where: {
+        id: pendingId,
+        chatId,
+        expiresAt: { gt: new Date() }
+      }
+    });
+
+    if (claimed.count !== 1) {
+      return false;
+    }
+
+    await transaction.workRecord.create({
+      data: {
+        userId: trackerUserId,
+        title: payload.data.title,
+        recordType: payload.data.recordType,
+        summary: payload.data.summary,
+        insight: payload.data.insight,
+        risk: payload.data.risk,
+        nextStep: payload.data.nextStep,
+        relatedWeekStart,
+        source: payload.data.source
+      }
+    });
+
+    return true;
+  });
+}
+
+function fallbackActionFromRecord(record: TelegramWorkRecord): TelegramDailyAction {
+  const actionText = record.nextStep || `${record.title}. ${record.summary}`;
+  return {
+    type: "OTHER",
+    date: todayInAmsterdam(),
+    target: null,
+    value: record.summary.slice(0, 300),
+    nextStep: record.nextStep?.slice(0, 300) || null,
+    note: actionText.slice(0, 4096)
+  };
+}
+
+async function convertPendingWorkRecord(chatId: string, pendingId: string) {
+  const pending = await prisma.telegramPendingWorkRecord.findFirst({
+    where: {
+      id: pendingId,
+      chatId,
+      expiresAt: { gt: new Date() }
+    },
+    select: { payload: true }
+  });
+  const payload = telegramWorkRecordSchema.safeParse(pending?.payload);
+
+  if (!payload.success) {
+    return null;
+  }
+
+  const actionText = payload.data.nextStep || `${payload.data.title}. ${payload.data.summary}`;
+  const parsedAction = await parseTelegramDailyAction(actionText).catch(() => null);
+  const action = parsedAction || fallbackActionFromRecord(payload.data);
+  const claimed = await prisma.telegramPendingWorkRecord.deleteMany({
+    where: {
+      id: pendingId,
+      chatId,
+      expiresAt: { gt: new Date() }
+    }
+  });
+
+  if (claimed.count !== 1) {
+    return null;
+  }
+
+  return { pendingId: await createPending(chatId, action), action };
+}
+
 export function createTelegramDependencies(
   config: TelegramRuntimeConfig
 ): TelegramWebhookDependencies {
   return {
+    classifyInput: classifyTelegramWorkInput,
     parseAction: (text) => parseTelegramDailyAction(text),
+    parseWorkRecord: (text, source) => parseTelegramWorkRecord(text, source),
     transcribeVoice: async (fileId) => {
       const audio = await downloadTelegramVoice(config.botToken, fileId);
       return transcribeTelegramVoice(audio);
     },
     createPending,
+    createPendingWorkRecord,
     cancelPending,
+    cancelPendingWorkRecord,
     savePending: (chatId, pendingId) =>
       savePending(chatId, pendingId, config.trackerUserId),
+    savePendingWorkRecord: (chatId, pendingId) =>
+      savePendingWorkRecord(chatId, pendingId, config.trackerUserId),
+    convertPendingWorkRecord,
     sendMessage: (chatId, text, replyMarkup) =>
       sendTelegramMessage(config.botToken, chatId, text, replyMarkup),
     answerCallback: (callbackQueryId, text) =>

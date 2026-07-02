@@ -36,7 +36,16 @@ import {
 import { formatCurrency, formatDate, toDateInputValue, typeLabels } from "@/lib/format";
 import { buildPeriodQuery, createPeriodState, describePeriod } from "@/lib/period";
 import { parseSettings, storageKey } from "@/lib/settings";
-import type { Account, Category, CategoryKind, DashboardStats, Transaction } from "@/types/finance";
+import { normalizeWeekStart } from "@/lib/week";
+import type {
+  Account,
+  Category,
+  CategoryKind,
+  DailyActionLog,
+  DailyActionType,
+  DashboardStats,
+  Transaction
+} from "@/types/finance";
 
 type QuickAddForm = {
   accountId: string;
@@ -49,6 +58,20 @@ type QuickAddStatus = {
   message: string;
   tone: "success" | "error";
 };
+
+type DashboardWeeklyActions = {
+  actions: DailyActionLog[];
+  counts: Record<DailyActionType, number>;
+};
+
+const dashboardActionTypes: Array<[DailyActionType, string]> = [
+  ["FIRST_TOUCH", "Первые касания"],
+  ["FOLLOW_UP", "Follow-up"],
+  ["WARM_CONTACT", "Тёплые контакты"],
+  ["CALL", "Созвоны"],
+  ["PROPOSAL", "КП"],
+  ["PRICE_NAMED", "Цена названа"]
+];
 
 const initialQuickAdd: QuickAddForm = {
   accountId: "",
@@ -100,6 +123,7 @@ function transactionAmountPrefix(transaction: Transaction) {
 }
 
 export function DashboardClient() {
+  const currentWeekStart = normalizeWeekStart();
   const [stats, setStats] = useState<DashboardStats | null>(() =>
     readClientCache<DashboardStats>(dashboardCacheKey(initialDashboardPeriod))
   );
@@ -108,6 +132,9 @@ export function DashboardClient() {
       readClientCache<DashboardStats>(dashboardCacheKey(initialDashboardPeriod))?.accounts ?? []
   );
   const [categories, setCategories] = useState<Category[]>([]);
+  const [weeklyActions, setWeeklyActions] = useState<DashboardWeeklyActions | null>(() =>
+    readClientCache<DashboardWeeklyActions>(`daily-actions:${currentWeekStart}`)
+  );
   const [period, setPeriod] = useState(() => initialDashboardPeriod);
   const [quickAdd, setQuickAdd] = useState<QuickAddForm>(initialQuickAdd);
   const [showRecentTransactions, setShowRecentTransactions] = useState(false);
@@ -155,6 +182,19 @@ export function DashboardClient() {
     }
   }, []);
 
+  const loadWeeklyActions = useCallback(async (force = false) => {
+    try {
+      const data = await fetchJsonCached<DashboardWeeklyActions>(
+        `daily-actions:${currentWeekStart}`,
+        `/api/daily-actions?weekStartDate=${currentWeekStart}`,
+        { force, ttlMs: 10_000 }
+      );
+      setWeeklyActions(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось загрузить действия недели");
+    }
+  }, [currentWeekStart]);
+
   useEffect(() => {
     if (accounts.length === 0) {
       setQuickAdd((current) => ({ ...current, accountId: "" }));
@@ -169,7 +209,8 @@ export function DashboardClient() {
   useEffect(() => {
     loadStats();
     loadCategories();
-  }, [loadCategories, loadStats]);
+    loadWeeklyActions();
+  }, [loadCategories, loadStats, loadWeeklyActions]);
 
   useEffect(() => {
     async function refreshFinancialData() {
@@ -564,6 +605,34 @@ export function DashboardClient() {
               tone="expense"
             />
           </div>
+
+          <section className="mt-6 card p-4 sm:p-5" data-testid="dashboard-weekly-actions">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold text-ink">Действия недели</h2>
+              <Link
+                href={`/strategy/actions?week=${currentWeekStart}`}
+                className="text-sm font-medium text-accent hover:underline"
+              >
+                Открыть неделю →
+              </Link>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+              {dashboardActionTypes.map(([type, label]) => (
+                <div key={type} className="rounded-md border border-line p-3">
+                  <div className="text-xs text-muted">{label}</div>
+                  <div className="mt-1 text-lg font-semibold text-ink">
+                    {weeklyActions?.counts[type] ?? 0}
+                  </div>
+                </div>
+              ))}
+              <div className="rounded-md border border-line p-3">
+                <div className="text-xs text-muted">Всего действий</div>
+                <div className="mt-1 text-lg font-semibold text-ink">
+                  {weeklyActions?.actions.length ?? 0}
+                </div>
+              </div>
+            </div>
+          </section>
 
           {stats.accounts.length > 0 ? (
             <section className="mt-6 card p-4 sm:p-5">

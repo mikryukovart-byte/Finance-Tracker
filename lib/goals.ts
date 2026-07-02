@@ -88,6 +88,7 @@ export type GoalsTimingLabel = "parallelData";
 
 export type GoalsPayloadOptions = {
   onTiming?: (label: GoalsTimingLabel, ms: number) => void;
+  weekStartDate?: Date;
 };
 
 type SelectedGoalRow = SelectedGoalPlan["rows"][number];
@@ -709,8 +710,12 @@ async function getWeeklyIncomeFacts(
   };
 }
 
-async function buildWeeklyTakt(userId: string, plan: SelectedGoalPlan): Promise<WeeklyTakt> {
-  const now = new Date();
+async function buildWeeklyTakt(
+  userId: string,
+  plan: SelectedGoalPlan,
+  selectedWeekStart?: Date
+): Promise<WeeklyTakt> {
+  const now = selectedWeekStart ?? new Date();
   const cycle = currentCycleState(plan.rows as HydratedGoalRow[], plan.planStartDate, now);
   const row = cycle.row;
   const previewRow = row ?? cycle.nextRow;
@@ -1202,7 +1207,11 @@ export async function getGoalsPayload(userId: string, year: number, options?: Go
   }
 
   const hydratedPlan = hydrateGoalPlan(plan, snapshot.autoPointA);
-  const weeklyTakt = await buildWeeklyTakt(userId, hydratedPlan);
+  const weeklyTakt = await buildWeeklyTakt(
+    userId,
+    hydratedPlan,
+    options?.weekStartDate
+  );
 
   return {
     plan: hydratedPlan,

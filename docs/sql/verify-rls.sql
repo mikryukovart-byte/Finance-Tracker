@@ -17,6 +17,8 @@ WITH protected_tables(table_name) AS (
   VALUES
     ('DailyActionLog'),
     ('TelegramPendingAction'),
+    ('TelegramPendingWorkRecord'),
+    ('WorkRecord'),
     ('MonthlyTaktLevel'),
     ('ThreeYearGoalScenario'),
     ('AnnualGoalRow'),
@@ -72,6 +74,8 @@ WHERE schemaname = 'public'
   AND tablename IN (
     'DailyActionLog',
     'TelegramPendingAction',
+    'TelegramPendingWorkRecord',
+    'WorkRecord',
     'MonthlyTaktLevel',
     'ThreeYearGoalScenario',
     'AnnualGoalRow',

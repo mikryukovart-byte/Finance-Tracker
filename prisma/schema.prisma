@@ -8,6 +8,23 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+enum WorkRecordType {
+  NOTE
+  DECISION
+  RISK
+  IDEA
+  DAILY_REFLECTION
+  WEEKLY_PLAN_DRAFT
+  HYPOTHESIS_DRAFT
+  ACTION_CANDIDATE
+}
+
+enum WorkRecordSource {
+  TELEGRAM_TEXT
+  TELEGRAM_VOICE
+  WEB_MANUAL
+}
+
 model Category {
   id           String        @id @default(cuid())
   userId       String
@@ -256,6 +273,39 @@ model DailyActionLog {
 }
 
 model TelegramPendingAction {
+  id        String   @id @default(cuid())
+  chatId    String
+  payload   Json
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([chatId, expiresAt])
+  @@index([expiresAt])
+}
+
+model WorkRecord {
+  id               String           @id @default(cuid())
+  userId           String
+  title            String
+  recordType       WorkRecordType
+  summary          String
+  insight          String?
+  risk             String?
+  nextStep         String?
+  relatedWeekStart DateTime?        @db.Date
+  source           WorkRecordSource
+  deletedAt        DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([userId, recordType, createdAt])
+  @@index([userId, recordType, deletedAt])
+  @@index([userId, relatedWeekStart])
+  @@index([userId, deletedAt])
+}
+
+model TelegramPendingWorkRecord {
   id        String   @id @default(cuid())
   chatId    String
   payload   Json
