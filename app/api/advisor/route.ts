@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getAdvisorResponse } from "@/lib/advisor";
+import { generateAdvisorReview, getAdvisorOverview } from "@/lib/advisor-v2";
 import { isAuthError, requireAuth } from "@/lib/auth";
 import { createApiTimer } from "@/lib/perf";
 
@@ -18,13 +18,24 @@ export async function GET() {
   }
 
   const dbStarted = Date.now();
-  const response = await getAdvisorResponse(auth.userId, false);
-  timer.mark("db", dbStarted);
-  timer.done({ refresh: false });
-  return NextResponse.json(response);
+  try {
+    const response = await getAdvisorOverview(auth.userId);
+    timer.mark("db", dbStarted);
+    timer.done({ generated: false });
+    return NextResponse.json(response);
+  } catch (error) {
+    console.error("Advisor overview failed", {
+      message: error instanceof Error ? error.message : "unknown"
+    });
+    timer.done({ status: 500, generated: false });
+    return NextResponse.json(
+      { message: "Не удалось загрузить данные советника" },
+      { status: 500 }
+    );
+  }
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   const timer = createApiTimer("/api/advisor");
   const authStarted = Date.now();
   const auth = await requireAuth();
@@ -36,8 +47,23 @@ export async function POST() {
   }
 
   const dbStarted = Date.now();
-  const response = await getAdvisorResponse(auth.userId, true);
-  timer.mark("db", dbStarted);
-  timer.done({ refresh: true });
-  return NextResponse.json(response);
+  const forceRuleBased =
+    process.env.NODE_ENV !== "production" &&
+    request.headers.get("x-e2e-advisor-fallback") === "1";
+
+  try {
+    const response = await generateAdvisorReview(auth.userId, { forceRuleBased });
+    timer.mark("db", dbStarted);
+    timer.done({ generated: true, source: response.report?.source });
+    return NextResponse.json(response, { status: 201 });
+  } catch (error) {
+    console.error("Advisor report generation failed", {
+      message: error instanceof Error ? error.message : "unknown"
+    });
+    timer.done({ status: 500, generated: true });
+    return NextResponse.json(
+      { message: "Не удалось собрать стратегический разбор" },
+      { status: 500 }
+    );
+  }
 }

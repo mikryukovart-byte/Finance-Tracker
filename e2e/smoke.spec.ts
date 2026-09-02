@@ -370,4 +370,67 @@ test.describe("smoke", () => {
     await expect(card).toBeVisible();
     await expect(card.getByText(/удалена/)).toBeVisible();
   });
+
+  test("generates and persists Advisor V2 only after an explicit request", async ({
+    page,
+    playwright
+  }) => {
+    test.setTimeout(120_000);
+    await openAppPage(page, "/advisor", "Советник");
+
+    const firstOverview = await page.request.get("/api/advisor");
+    expect(firstOverview.ok()).toBeTruthy();
+    const firstData = await firstOverview.json();
+    const secondOverview = await page.request.get("/api/advisor");
+    expect(secondOverview.ok()).toBeTruthy();
+    const secondData = await secondOverview.json();
+
+    expect(secondData.report?.id ?? null).toBe(firstData.report?.id ?? null);
+
+    const marker = `E2E Advisor WorkRecord ${Date.now()}`;
+    const workRecordResponse = await page.request.post("/api/work-records", {
+      data: {
+        title: marker,
+        recordType: "DECISION",
+        summary: "На этой неделе главным приоритетом остаются клиентские касания. Результат нужно проверить по оплатам.",
+        insight: "Советник должен сопоставить намерение с фактическими действиями.",
+        nextStep: "Проверить в следующем недельном разборе"
+      }
+    });
+    expect(workRecordResponse.status()).toBe(201);
+    const workRecord = await workRecordResponse.json();
+
+    const generatedResponse = await page.request.post("/api/advisor", {
+      headers: { "x-e2e-advisor-fallback": "1" }
+    });
+    expect(generatedResponse.status()).toBe(201);
+    const generated = await generatedResponse.json();
+    expect(generated.report?.id).toBeTruthy();
+    expect(generated.report?.content).toContain(marker);
+
+    await page.reload();
+    await expect(page.getByTestId("advisor-report-content")).toContainText(marker);
+
+    const persistedResponse = await page.request.get("/api/advisor");
+    const persisted = await persistedResponse.json();
+    expect(persisted.report?.id).toBe(generated.report.id);
+
+    const refreshedResponse = await page.request.post("/api/advisor", {
+      headers: { "x-e2e-advisor-fallback": "1" }
+    });
+    expect(refreshedResponse.status()).toBe(201);
+    const refreshed = await refreshedResponse.json();
+    expect(refreshed.report?.id).not.toBe(generated.report.id);
+
+    const anonymous = await playwright.request.newContext({
+      baseURL: "http://localhost:3000",
+      storageState: { cookies: [], origins: [] }
+    });
+    const anonymousResponse = await anonymous.get("/api/advisor");
+    expect(anonymousResponse.status()).toBe(401);
+    await anonymous.dispose();
+
+    const cleanupResponse = await page.request.delete(`/api/work-records/${workRecord.id}`);
+    expect(cleanupResponse.ok()).toBeTruthy();
+  });
 });

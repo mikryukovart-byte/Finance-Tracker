@@ -305,6 +305,21 @@ model WorkRecord {
   @@index([userId, deletedAt])
 }
 
+model AdvisorReport {
+  id              String   @id @default(cuid())
+  userId          String
+  periodStart     DateTime @db.Date
+  periodEnd       DateTime @db.Date
+  content         String
+  model           String
+  source          String   @default("ai")
+  contextSnapshot Json?
+  createdAt       DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, periodStart, periodEnd])
+}
+
 model TelegramPendingWorkRecord {
   id        String   @id @default(cuid())
   chatId    String

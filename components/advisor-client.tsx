@@ -1,15 +1,6 @@
 "use client";
 
-import {
-  AlertTriangle,
-  Ban,
-  Brain,
-  CheckCircle2,
-  CreditCard,
-  RefreshCw,
-  ShieldAlert,
-  WalletCards
-} from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { EmptyState } from "@/components/empty-state";
@@ -22,132 +13,157 @@ import {
   setClientCache
 } from "@/lib/client-api";
 import { formatCurrency } from "@/lib/format";
-import type {
-  AdvisorAnalysis,
-  AdvisorResponse,
-  AdvisorSummary
-} from "@/types/finance";
+import type { AdvisorReport, AdvisorResponse, AdvisorSummary } from "@/types/finance";
 
-const analysisBlocks: Array<{
-  key: keyof Omit<AdvisorAnalysis, "source">;
-  title: string;
-  icon: typeof Brain;
-}> = [
-  { key: "shortConclusion", title: "Краткий вывод", icon: Brain },
-  { key: "mainRisk", title: "Главный риск", icon: ShieldAlert },
-  { key: "todayActions", title: "Что сделать сегодня", icon: CheckCircle2 },
-  { key: "weeklyExecution", title: "Действия недели", icon: CheckCircle2 },
-  { key: "dontDo", title: "Что не делать", icon: Ban },
-  { key: "debtPriority", title: "Приоритет по долгам", icon: CreditCard },
-  { key: "spendingLimit", title: "Лимит трат", icon: WalletCards },
-  { key: "hardTruth", title: "Жесткая правда", icon: AlertTriangle }
-];
-const advisorSummaryCacheKey = "advisor:summary";
+const advisorCacheKey = "advisor:overview";
 
-function formatDateTime(value: string | null) {
-  if (!value) {
-    return "Еще не обновлялся";
-  }
-
+function formatDateTime(value: string) {
   return new Intl.DateTimeFormat("ru-RU", {
     day: "2-digit",
-    month: "short",
+    month: "long",
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
 }
 
-function AnalysisCard({
-  title,
-  items,
-  icon: Icon
-}: {
-  title: string;
-  items: string[];
-  icon: typeof Brain;
-}) {
+function formatPeriod(startDate: string, endDate: string) {
+  const formatter = new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric"
+  });
+  return `${formatter.format(new Date(startDate))} — ${formatter.format(new Date(endDate))}`;
+}
+
+function displayValue(value: number | null) {
+  return value === null ? "—" : formatCurrency(value);
+}
+
+function ReportContent({ content }: { content: string }) {
   return (
-    <section className="card p-4 sm:p-5">
-      <div className="mb-3 flex items-center gap-2">
-        <div className="rounded-md bg-soft p-2 text-muted">
-          <Icon className="h-4 w-4" aria-hidden="true" />
-        </div>
-        <h2 className="font-semibold text-ink">{title}</h2>
-      </div>
-      {items.length > 0 ? (
-        <div className="space-y-2 text-sm leading-6 text-ink">
-          {items.map((item, index) => (
-            <p key={`${title}-${index}`}>{item}</p>
-          ))}
-        </div>
-      ) : (
-        <p className="text-sm text-muted">Нет данных для вывода.</p>
-      )}
-    </section>
+    <div className="space-y-3 text-[15px] leading-7 text-ink" data-testid="advisor-report-content">
+      {content.split("\n").map((rawLine, index) => {
+        const line = rawLine.trim();
+
+        if (!line) {
+          return <div className="h-1" key={`space-${index}`} aria-hidden="true" />;
+        }
+
+        const heading = line.match(/^#{1,3}\s+(.+)$/)?.[1];
+
+        if (heading) {
+          return (
+            <h3 className="pt-5 text-lg font-semibold text-ink first:pt-0" key={`heading-${index}`}>
+              {heading}
+            </h3>
+          );
+        }
+
+        if (/^[-*]\s+/.test(line)) {
+          return (
+            <div className="flex gap-3 pl-1" key={`item-${index}`}>
+              <span className="text-muted" aria-hidden="true">•</span>
+              <p>{line.replace(/^[-*]\s+/, "")}</p>
+            </div>
+          );
+        }
+
+        return <p key={`paragraph-${index}`}>{line}</p>;
+      })}
+    </div>
+  );
+}
+
+function SnapshotCard({ label, value, note }: { label: string; value: string; note?: string }) {
+  return (
+    <div className="card min-w-0 p-4">
+      <div className="text-xs font-medium uppercase text-muted">{label}</div>
+      <div className="mt-2 truncate text-xl font-semibold text-ink" title={value}>{value}</div>
+      {note ? <div className="mt-1 text-xs leading-5 text-muted">{note}</div> : null}
+    </div>
   );
 }
 
 export function AdvisorClient() {
-  const [summary, setSummary] = useState<AdvisorSummary | null>(
-    () => readClientCache<AdvisorResponse>(advisorSummaryCacheKey)?.summary ?? null
-  );
-  const [analysis, setAnalysis] = useState<AdvisorAnalysis | null>(null);
-  const [loadingSummary, setLoadingSummary] = useState(() => !summary);
-  const [refreshing, setRefreshing] = useState(false);
+  const cached = readClientCache<AdvisorResponse>(advisorCacheKey);
+  const [summary, setSummary] = useState<AdvisorSummary | null>(() => cached?.summary ?? null);
+  const [report, setReport] = useState<AdvisorReport | null>(() => cached?.report ?? null);
+  const [loading, setLoading] = useState(() => !cached);
+  const [generating, setGenerating] = useState(false);
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<"neutral" | "success" | "error">("neutral");
-  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 
-  const mainBlocks = useMemo(
-    () =>
-      analysisBlocks.filter((block) =>
-        ["shortConclusion", "mainRisk"].includes(block.key)
-      ),
-    []
-  );
-  const actionBlocks = useMemo(
-    () =>
-      analysisBlocks.filter((block) =>
-        ["todayActions", "weeklyExecution", "dontDo", "debtPriority"].includes(block.key)
-      ),
-    []
-  );
-  const otherBlocks = useMemo(
-    () =>
-      analysisBlocks.filter((block) =>
-        ["spendingLimit", "hardTruth"].includes(block.key)
-      ),
-    []
-  );
-
-  async function loadSummary() {
-    setMessage("");
-    const cached = readClientCache<AdvisorResponse>(advisorSummaryCacheKey);
-
-    if (cached) {
-      setSummary(cached.summary);
+  const snapshot = useMemo(() => {
+    if (!summary) {
+      return [];
     }
 
-    setLoadingSummary(!cached);
+    const creditCardDebt = summary.creditCards.reduce(
+      (sum, card) => sum + card.currentDebt,
+      0
+    );
+    const currentTarget = summary.weeklyTakt?.monthlyTarget ??
+      summary.annualGoals?.currentMonth.c2Plan ?? null;
+    const currentGap = currentTarget === null
+      ? null
+      : Math.max(0, currentTarget - summary.totals.monthlyIncome);
+    const actions = summary.weeklyExecution.actionCounts;
+
+    return [
+      {
+        label: "Собственные деньги",
+        value: formatCurrency(summary.totals.realMoney),
+        note: "Без доступного лимита кредиток"
+      },
+      { label: "Общий долг", value: formatCurrency(summary.totals.totalDebt) },
+      { label: "Долг по кредиткам", value: formatCurrency(creditCardDebt) },
+      {
+        label: "Обязательные платежи",
+        value: formatCurrency(summary.totals.requiredPaymentsBeforeMonthEnd),
+        note: "До конца месяца"
+      },
+      { label: "Доход за месяц", value: formatCurrency(summary.totals.monthlyIncome) },
+      {
+        label: "Цель месяца",
+        value: displayValue(currentTarget),
+        note: summary.weeklyTakt?.selectedScenario ?? "Активный план не определен"
+      },
+      { label: "Разрыв месяца", value: displayValue(currentGap) },
+      {
+        label: "Действия недели",
+        value: String(summary.weeklyExecution.actionCount),
+        note: `${actions.firstTouches} касаний · ${actions.calls} звонков · ${actions.proposals} КП`
+      },
+      {
+        label: "Гипотезы",
+        value: String(summary.weeklyExecution.hypothesisCount),
+        note: `${actions.followUps} follow-up · ${actions.priceNamed} цен названо`
+      }
+    ];
+  }, [summary]);
+
+  async function loadOverview() {
+    const current = readClientCache<AdvisorResponse>(advisorCacheKey);
+    setLoading(!current);
+    setMessage("");
 
     try {
-      const data = await fetchJsonCached<AdvisorResponse>(
-        advisorSummaryCacheKey,
-        "/api/advisor",
-        { ttlMs: 15_000 }
-      );
+      const data = await fetchJsonCached<AdvisorResponse>(advisorCacheKey, "/api/advisor", {
+        ttlMs: 15_000
+      });
       setSummary(data.summary);
+      setReport(data.report ?? null);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Не удалось загрузить сводку");
+      setMessage(error instanceof Error ? error.message : "Не удалось загрузить советника");
       setMessageTone("error");
     } finally {
-      setLoadingSummary(false);
+      setLoading(false);
     }
   }
 
-  async function refreshAnalysis() {
-    setRefreshing(true);
+  async function generateReport() {
+    setGenerating(true);
     setMessage("");
 
     try {
@@ -161,135 +177,90 @@ export function AdvisorClient() {
       }
 
       const data: AdvisorResponse = await response.json();
-      setClientCache(advisorSummaryCacheKey, {
-        summary: data.summary,
-        analysis: null
-      } satisfies AdvisorResponse);
+      setClientCache(advisorCacheKey, data, 15_000);
       setSummary(data.summary);
-      setAnalysis(data.analysis);
-      setLastUpdated(new Date().toISOString());
-      setMessage(data.warning ?? "Анализ обновлен");
+      setReport(data.report);
+      setMessage(data.warning ?? "Стратегический разбор сохранен");
       setMessageTone(data.warning ? "neutral" : "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Не удалось обновить анализ");
+      setMessage(error instanceof Error ? error.message : "Не удалось собрать разбор");
       setMessageTone("error");
     } finally {
-      setRefreshing(false);
+      setGenerating(false);
     }
   }
 
   useEffect(() => {
-    loadSummary();
+    loadOverview();
   }, []);
 
   return (
     <div>
       <PageHeader
         title="Советник"
-        description="Короткий практический анализ на основе текущих данных."
-      >
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={refreshAnalysis}
-          disabled={refreshing}
-        >
-          <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} aria-hidden="true" />
-          {refreshing ? "Обновление" : "Обновить анализ"}
-        </button>
-      </PageHeader>
-
-      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className="text-sm text-muted">
-          Последнее обновление анализа: {formatDateTime(lastUpdated)}
-        </div>
-        {analysis ? (
-          <div className="text-xs text-muted">
-            Источник: {analysis.source === "ai" ? "AI" : "расчетные правила"}
-          </div>
-        ) : null}
-      </div>
+        description="Еженедельный стратегический разбор денег, целей и фактических действий."
+      />
 
       <Notice message={message} tone={messageTone} />
 
-      {loadingSummary && summary ? (
-        <p className="mt-6 text-sm text-muted">Обновляем сводку…</p>
-      ) : null}
-
-      {loadingSummary && !summary ? (
-        <>
-          <p className="mt-6 text-sm text-muted">Загрузка...</p>
-        </>
+      {loading && !summary ? (
+        <p className="mt-6 text-sm text-muted">Загрузка...</p>
       ) : summary ? (
         <>
-          <section className="mt-6 card p-4 sm:p-5">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <section className="mt-6">
+            <div className="mb-3 flex items-end justify-between gap-4">
               <div>
-                <h2 className="text-lg font-semibold text-ink">Короткий статус</h2>
-                <p className="mt-1 text-sm text-muted">
-                  {summary.period.label}: деньги {formatCurrency(summary.totals.realMoney)},
-                  долг {formatCurrency(summary.totals.totalDebt)}, чистая позиция{" "}
-                  {formatCurrency(summary.totals.netPosition)}. Доступный лимит кредиток не
-                  считается деньгами.
-                </p>
+                <h2 className="text-lg font-semibold text-ink">Фактический снимок</h2>
+                <p className="mt-1 text-sm text-muted">{summary.period.label}</p>
               </div>
-              <div className="text-sm text-muted">
-                Безопасный лимит:{" "}
-                <span className="font-medium text-ink">
-                  {formatCurrency(summary.totals.safeDailyLimit)}
-                </span>
-              </div>
+              {loading ? <span className="text-xs text-muted">Обновляем данные…</span> : null}
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {snapshot.map((item) => <SnapshotCard key={item.label} {...item} />)}
             </div>
           </section>
 
-          <section className="mt-6">
-            <h2 className="mb-3 text-lg font-semibold text-ink">Финансовый вывод</h2>
-            {analysis ? (
-              <div className="grid gap-4 lg:grid-cols-2">
-                {mainBlocks.map((block) => (
-                  <AnalysisCard
-                    key={block.key}
-                    title={block.title}
-                    icon={block.icon}
-                    items={analysis[block.key]}
-                  />
-                ))}
+          <section className="mt-6 card p-5 sm:p-7" data-testid="advisor-report">
+            <div className="flex flex-col gap-4 border-b border-line pb-5 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-xl font-semibold text-ink">Стратегический разбор</h2>
+                <p className="mt-1 text-sm text-muted">
+                  Один связный отчет по финансам, плану, действиям и рабочим записям.
+                </p>
               </div>
+              <button
+                type="button"
+                className="btn-primary shrink-0"
+                onClick={generateReport}
+                disabled={generating}
+                data-testid="advisor-generate"
+              >
+                <RefreshCw className={`h-4 w-4 ${generating ? "animate-spin" : ""}`} aria-hidden="true" />
+                {generating ? "Собираем разбор" : report ? "Обновить разбор" : "Собрать разбор"}
+              </button>
+            </div>
+
+            {report ? (
+              <>
+                <div className="flex flex-col gap-1 border-b border-line py-4 text-xs text-muted sm:flex-row sm:items-center sm:justify-between">
+                  <span>Период: {formatPeriod(report.periodStart, report.periodEnd)}</span>
+                  <span>
+                    Сформирован: {formatDateTime(report.createdAt)} · {report.source === "ai" ? report.model : "расчетный разбор"}
+                  </span>
+                </div>
+                <article className="mx-auto mt-6 max-w-3xl">
+                  <ReportContent content={report.content} />
+                </article>
+              </>
             ) : (
-              <div className="card p-4 sm:p-5">
-                <EmptyState text="Нажмите «Обновить анализ», чтобы получить вывод советника." />
+              <div className="py-8">
+                <EmptyState text="Нажмите «Собрать разбор». Без явного запроса AI не вызывается." />
               </div>
             )}
           </section>
-
-          {analysis ? (
-            <>
-              <div className="mt-6 grid gap-4 lg:grid-cols-3">
-                {actionBlocks.map((block) => (
-                  <AnalysisCard
-                    key={block.key}
-                    title={block.title}
-                    icon={block.icon}
-                    items={analysis[block.key]}
-                  />
-                ))}
-              </div>
-              <div className="mt-6 grid gap-4 lg:grid-cols-2">
-                {otherBlocks.map((block) => (
-                  <AnalysisCard
-                    key={block.key}
-                    title={block.title}
-                    icon={block.icon}
-                    items={analysis[block.key]}
-                  />
-                ))}
-              </div>
-            </>
-          ) : null}
-
         </>
       ) : (
-        <EmptyState text="Нет данных для анализа" />
+        <EmptyState text="Нет данных для стратегического разбора" />
       )}
     </div>
   );

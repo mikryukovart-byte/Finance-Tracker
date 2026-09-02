@@ -15,6 +15,7 @@ ORDER BY c.relname;
 -- rls_enabled = true, has_data_api_policy = false, has_data_api_grant = false.
 WITH protected_tables(table_name) AS (
   VALUES
+    ('AdvisorReport'),
     ('DailyActionLog'),
     ('TelegramPendingAction'),
     ('TelegramPendingWorkRecord'),
@@ -72,6 +73,7 @@ SELECT
 FROM pg_policies
 WHERE schemaname = 'public'
   AND tablename IN (
+    'AdvisorReport',
     'DailyActionLog',
     'TelegramPendingAction',
     'TelegramPendingWorkRecord',

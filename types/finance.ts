@@ -273,6 +273,16 @@ export type AdvisorAnalysis = {
   source: "ai" | "rules";
 };
 
+export type AdvisorReport = {
+  id: string;
+  periodStart: string;
+  periodEnd: string;
+  content: string;
+  model: string;
+  source: "ai" | "rules";
+  createdAt: string;
+};
+
 export type AdvisorSummary = {
   generatedAt: string;
   period: {
@@ -489,7 +499,7 @@ export type AdvisorSummary = {
 
 export type AdvisorResponse = {
   summary: AdvisorSummary;
-  analysis: AdvisorAnalysis | null;
+  report: AdvisorReport | null;
   warning?: string;
 };
 

@@ -19,7 +19,6 @@ import { calculateGoalRowValues, type GoalRowKey } from "@/lib/goals";
 import { prisma } from "@/lib/prisma";
 import type {
   AdvisorAnalysis,
-  AdvisorResponse,
   AdvisorSummary,
   DailyActionType,
   WeeklyHypothesisStatus
@@ -1721,7 +1720,11 @@ async function callOpenAi(summary: AdvisorSummary): Promise<AdvisorAnalysis> {
 export async function getAdvisorResponse(
   userId: string,
   generateAnalysis: boolean
-): Promise<AdvisorResponse> {
+): Promise<{
+  summary: AdvisorSummary;
+  analysis: AdvisorAnalysis | null;
+  warning?: string;
+}> {
   const summary = await getAdvisorSummary(userId);
 
   if (!generateAnalysis) {
