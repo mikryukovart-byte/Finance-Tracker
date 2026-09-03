@@ -13,7 +13,10 @@ import type { TelegramWorkRecord } from "@/lib/telegram-work-records";
 import {
   classifyTelegramInput,
   hasExplicitLifeContextIntent,
+  journalMaxCompletionTokens,
+  journalModel,
   parseTelegramJournal,
+  TelegramJournalParseError,
   type TelegramJournal
 } from "@/lib/journal";
 import {
@@ -62,6 +65,31 @@ const journalEntry: TelegramJournal = {
   nextStep: null,
   importance: "NORMAL"
 };
+
+const longTranscriptParts = Array.from(
+  { length: 90 },
+  (_, index) => `Фрагмент ${index + 1}: я подробно проговариваю события дня, свои сомнения, работу и то, что пока не хочу делать поспешных выводов.`
+);
+const longTranscript = longTranscriptParts.join(" ");
+const longCleanedText = longTranscriptParts.slice(0, 68).join(" ");
+
+function journalOutput(overrides: Partial<Omit<TelegramJournal, "source">> = {}) {
+  const { source: _source, ...base } = journalEntry;
+  return { ...base, ...overrides };
+}
+
+function chatCompletionResponse(
+  content: unknown,
+  finishReason = "stop",
+  status = 200
+) {
+  return new Response(JSON.stringify({
+    choices: [{
+      finish_reason: finishReason,
+      message: { content: typeof content === "string" ? content : JSON.stringify(content) }
+    }]
+  }), { status, headers: { "Content-Type": "application/json" } });
+}
 
 const existingLifeContext: LifeContextValue = {
   currentSituation: "Сейчас я работаю в найме пять дней в неделю.",
@@ -210,6 +238,21 @@ test.describe("Telegram webhook core", () => {
         )).resolves.toBe("LIFE_CONTEXT");
       }
     );
+  });
+
+  test("routes explicit initial-fill and update phrases to LifeContext", async () => {
+    for (const text of [
+      "Заполни мой текущий контекст. Сейчас я работаю в найме и развиваю свой проект.",
+      "Хочу обновить текущий контекст. Главным приоритетом стала финансовая устойчивость."
+    ]) {
+      await withMockedOpenAiResponse(
+        { kind: "LIFE_CONTEXT", confidence: 0.97 },
+        async () => {
+          await expect(classifyTelegramInput(text, "TELEGRAM_VOICE"))
+            .resolves.toBe("LIFE_CONTEXT");
+        }
+      );
+    }
   });
 
   test("classifies an explicit text priority update as LifeContext", async () => {
@@ -416,6 +459,165 @@ test.describe("Telegram webhook core", () => {
     } finally {
       global.fetch = originalFetch;
       process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
+  test("parses a content-rich 4-5 minute Journal result with strict schema and an explicit output budget", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const requestBodies: Array<Record<string, any>> = [];
+    process.env.OPENAI_API_KEY = "test-key";
+    global.fetch = async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return chatCompletionResponse(journalOutput({ cleanedText: longCleanedText }));
+    };
+    try {
+      const parsed = await parseTelegramJournal(
+        longTranscript,
+        "TELEGRAM_VOICE",
+        new Date("2026-09-03T12:00:00Z")
+      );
+      expect(parsed?.cleanedText.length).toBeGreaterThan(5000);
+      expect(parsed!.cleanedText.length / longTranscript.length).toBeGreaterThan(0.6);
+      const requestBody = requestBodies[0];
+      expect(requestBody.max_completion_tokens).toBe(journalMaxCompletionTokens);
+      expect(requestBody.response_format?.type).toBe("json_schema");
+      expect(requestBody.response_format?.json_schema?.strict).toBeTruthy();
+      expect(JSON.stringify(requestBody.response_format?.json_schema?.schema))
+        .not.toContain("uniqueItems");
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
+  test("repairs a malformed structured Journal response once without resending the transcript", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const requestBodies: Array<Record<string, any>> = [];
+    let attempt = 0;
+    process.env.OPENAI_API_KEY = "test-key";
+    global.fetch = async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      attempt += 1;
+      return attempt === 1
+        ? chatCompletionResponse("{\"entryDate\":")
+        : chatCompletionResponse(journalOutput({ cleanedText: longCleanedText }));
+    };
+    try {
+      const parsed = await parseTelegramJournal(longTranscript, "TELEGRAM_VOICE");
+      expect(parsed?.cleanedText).toBe(longCleanedText);
+      expect(attempt).toBe(2);
+      expect(requestBodies[1].messages[1].content).toBe("{\"entryDate\":");
+      expect(requestBodies[1].messages[1].content).not.toContain(longTranscriptParts[20]);
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
+  test("reprocesses the transcript once when the first Journal output is truncated", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const requestBodies: Array<Record<string, any>> = [];
+    let attempt = 0;
+    process.env.OPENAI_API_KEY = "test-key";
+    global.fetch = async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      attempt += 1;
+      return attempt === 1
+        ? chatCompletionResponse("{\"entryDate\":\"2026-09-03\"", "length")
+        : chatCompletionResponse(journalOutput({ cleanedText: longCleanedText }));
+    };
+    try {
+      const parsed = await parseTelegramJournal(longTranscript, "TELEGRAM_VOICE");
+      expect(parsed?.cleanedText).toBe(longCleanedText);
+      expect(attempt).toBe(2);
+      expect(requestBodies[1].messages[1].content).toBe(longTranscript);
+      expect(requestBodies[1].messages[0].content).toContain("повторная попытка");
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
+  test("retries a schema-invalid Journal response and validates the repaired result", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    let attempt = 0;
+    process.env.OPENAI_API_KEY = "test-key";
+    global.fetch = async () => {
+      attempt += 1;
+      return attempt === 1
+        ? chatCompletionResponse(journalOutput({ domains: [] }))
+        : chatCompletionResponse(journalOutput({ cleanedText: longCleanedText }));
+    };
+    try {
+      const parsed = await parseTelegramJournal(longTranscript, "TELEGRAM_VOICE");
+      expect(parsed?.domains.length).toBeGreaterThan(0);
+      expect(attempt).toBe(2);
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
+  test("fails after two malformed Journal attempts with a structured error", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    let attempt = 0;
+    process.env.OPENAI_API_KEY = "test-key";
+    global.fetch = async () => {
+      attempt += 1;
+      return chatCompletionResponse("not-json");
+    };
+    try {
+      await expect(parseTelegramJournal(longTranscript, "TELEGRAM_VOICE"))
+        .rejects.toMatchObject({
+          name: "TelegramJournalParseError",
+          reason: "MALFORMED_JSON",
+          attempts: 2
+        });
+      expect(attempt).toBe(2);
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
+  test("logs only safe Journal diagnostics for an OpenAI HTTP failure", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const originalConsoleError = console.error;
+    const logs: unknown[][] = [];
+    let requestCount = 0;
+    process.env.OPENAI_API_KEY = "test-key";
+    console.error = (...args) => { logs.push(args); };
+    global.fetch = async () => {
+      requestCount += 1;
+      return new Response(JSON.stringify({
+        error: {
+          type: "invalid_request_error",
+          code: "invalid_json_schema",
+          param: "response_format",
+          message: "PRIVATE-CONTENT-MUST-NOT-BE-LOGGED"
+        }
+      }), { status: 400, headers: { "Content-Type": "application/json" } });
+    };
+    try {
+      await expect(parseTelegramJournal(longTranscript, "TELEGRAM_VOICE"))
+        .rejects.toBeInstanceOf(TelegramJournalParseError);
+      const serialized = JSON.stringify(logs);
+      expect(serialized).toContain("telegram_journal_entry");
+      expect(serialized).toContain("invalid_json_schema");
+      expect(serialized).toContain("response_format");
+      expect(serialized).not.toContain("PRIVATE-CONTENT-MUST-NOT-BE-LOGGED");
+      expect(serialized).not.toContain(longTranscriptParts[0]);
+      expect(requestCount).toBe(1);
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+      console.error = originalConsoleError;
     }
   });
 
@@ -851,6 +1053,187 @@ test.describe("Telegram webhook core", () => {
     expect(messages[0]).toContain("изменился после создания preview");
   });
 
+  test("accepts a 291-second voice and preserves a substantial cleaned Journal", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    let transcribed = 0;
+    const pendingEntries: TelegramJournal[] = [];
+    process.env.OPENAI_API_KEY = "test-key";
+    global.fetch = async () => chatCompletionResponse(
+      journalOutput({ cleanedText: longCleanedText })
+    );
+    try {
+      await processTelegramUpdate(
+        {
+          message: {
+            chat: { id: "allowed-chat" },
+            voice: { file_id: "voice-291", duration: 291 }
+          }
+        },
+        "allowed-chat",
+        createDependencies({
+          classifyInput: async () => "JOURNAL",
+          transcribeVoice: async () => {
+            transcribed += 1;
+            return longTranscript;
+          },
+          parseJournal: (text, source) => parseTelegramJournal(text, source),
+          createPendingJournal: async (_chatId, entry) => {
+            pendingEntries.push(entry);
+            return "journal-pending-id";
+          }
+        })
+      );
+      expect(transcribed).toBe(1);
+      expect(pendingEntries[0]?.cleanedText.length).toBeGreaterThan(5000);
+      expect(Object.keys(pendingEntries[0] ?? {})).not.toContain("rawTranscript");
+      expect(Object.keys(pendingEntries[0] ?? {})).not.toContain("fileId");
+      expect(JSON.stringify(pendingEntries[0])).not.toContain("voice-291");
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
+  test("Journal retry creates only one confirmation draft and no duplicate record", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    let attempt = 0;
+    let pendingCount = 0;
+    let savedCount = 0;
+    process.env.OPENAI_API_KEY = "test-key";
+    global.fetch = async () => {
+      attempt += 1;
+      return attempt === 1
+        ? chatCompletionResponse("broken-json")
+        : chatCompletionResponse(journalOutput({ cleanedText: longCleanedText }));
+    };
+    try {
+      await processTelegramUpdate(
+        {
+          message: {
+            chat: { id: "allowed-chat" },
+            voice: { file_id: "voice-retry", duration: 291 }
+          }
+        },
+        "allowed-chat",
+        createDependencies({
+          classifyInput: async () => "JOURNAL",
+          transcribeVoice: async () => longTranscript,
+          parseJournal: (text, source) => parseTelegramJournal(text, source),
+          createPendingJournal: async () => {
+            pendingCount += 1;
+            return "journal-pending-id";
+          },
+          savePendingJournal: async () => {
+            savedCount += 1;
+            return { id: "journal-id", summary: journalEntry.summary };
+          }
+        })
+      );
+      expect(attempt).toBe(2);
+      expect(pendingCount).toBe(1);
+      expect(savedCount).toBe(0);
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
+  test("two failed Journal attempts create no draft or record and return a clear message", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const originalConsoleError = console.error;
+    let pendingCount = 0;
+    let savedCount = 0;
+    let attempt = 0;
+    const messages: string[] = [];
+    process.env.OPENAI_API_KEY = "test-key";
+    console.error = () => {};
+    global.fetch = async () => {
+      attempt += 1;
+      return chatCompletionResponse("still-broken");
+    };
+    try {
+      await processTelegramUpdate(
+        {
+          message: {
+            chat: { id: "allowed-chat" },
+            voice: { file_id: "voice-fails", duration: 291 }
+          }
+        },
+        "allowed-chat",
+        createDependencies({
+          classifyInput: async () => "JOURNAL",
+          transcribeVoice: async () => longTranscript,
+          parseJournal: (text, source) => parseTelegramJournal(text, source),
+          createPendingJournal: async () => {
+            pendingCount += 1;
+            return "journal-pending-id";
+          },
+          savePendingJournal: async () => {
+            savedCount += 1;
+            return { id: "journal-id", summary: journalEntry.summary };
+          },
+          sendMessage: async (_chatId, text) => {
+            messages.push(text);
+            return {};
+          }
+        })
+      );
+      expect(attempt).toBe(2);
+      expect(pendingCount).toBe(0);
+      expect(savedCount).toBe(0);
+      expect(messages[0]).toContain("после двух попыток");
+      expect(messages[0]).toContain("Ничего не сохранено");
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+      console.error = originalConsoleError;
+    }
+  });
+
+  test("routes a long explicit LifeContext voice away from Journal", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const explicitTranscript = `Заполни мой текущий контекст. ${longTranscript}`;
+    let contextCount = 0;
+    let journalCount = 0;
+    process.env.OPENAI_API_KEY = "test-key";
+    global.fetch = async () => chatCompletionResponse({
+      kind: "LIFE_CONTEXT",
+      confidence: 0.98
+    });
+    try {
+      await processTelegramUpdate(
+        {
+          message: {
+            chat: { id: "allowed-chat" },
+            voice: { file_id: "voice-life-context", duration: 291 }
+          }
+        },
+        "allowed-chat",
+        createDependencies({
+          classifyInput: (text, source) => classifyTelegramInput(text, source),
+          transcribeVoice: async () => explicitTranscript,
+          parseJournal: async () => {
+            journalCount += 1;
+            return journalEntry;
+          },
+          createPendingLifeContext: async () => {
+            contextCount += 1;
+            return "context-pending-id";
+          }
+        })
+      );
+      expect(contextCount).toBe(1);
+      expect(journalCount).toBe(0);
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
   test("accepts a voice message up to 300 seconds", async () => {
     let transcribed = 0;
     const pendingEntries: TelegramJournal[] = [];
@@ -999,6 +1382,25 @@ test.describe("Telegram webhook core", () => {
       expect(dailyFeedbackModel()).toBe("common-model");
     } finally {
       process.env.OPENAI_DAILY_FEEDBACK_MODEL = previous.feedback;
+      process.env.OPENAI_WORK_RECORD_MODEL = previous.work;
+      process.env.OPENAI_MODEL = previous.common;
+    }
+  });
+
+  test("uses the WorkRecord model chain for Journal parsing", () => {
+    const previous = {
+      work: process.env.OPENAI_WORK_RECORD_MODEL,
+      common: process.env.OPENAI_MODEL
+    };
+    try {
+      process.env.OPENAI_WORK_RECORD_MODEL = "journal-work-model";
+      process.env.OPENAI_MODEL = "common-model";
+      expect(journalModel()).toBe("journal-work-model");
+      delete process.env.OPENAI_WORK_RECORD_MODEL;
+      expect(journalModel()).toBe("common-model");
+      delete process.env.OPENAI_MODEL;
+      expect(journalModel()).toBe("gpt-4o-mini");
+    } finally {
       process.env.OPENAI_WORK_RECORD_MODEL = previous.work;
       process.env.OPENAI_MODEL = previous.common;
     }

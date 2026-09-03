@@ -10,6 +10,7 @@ import {
 import {
   journalDomainLabels,
   journalPreviewThoughts,
+  TelegramJournalParseError,
   type TelegramInputKind,
   type TelegramJournal,
   type TelegramJournalSource
@@ -406,6 +407,15 @@ async function parseAndConfirm(
     });
   } catch (error) {
     console.error("Telegram message parse error", error);
+    if (error instanceof TelegramJournalParseError) {
+      await dependencies.sendMessage(
+        chatId,
+        error.attempts === 2
+          ? "Не смог структурировать дневниковую запись после двух попыток. Ничего не сохранено. Попробуй отправить текстом или разделить голосовое на две части."
+          : "Не смог структурировать дневниковую запись. Ничего не сохранено. Попробуй отправить текстом или повторить позже."
+      );
+      return;
+    }
     await dependencies.sendMessage(
       chatId,
       "Не смог обработать сообщение. Попробуй ещё раз или отправь текст короче."

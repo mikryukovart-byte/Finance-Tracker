@@ -80,8 +80,73 @@ function openAiApiKey() {
   return apiKey;
 }
 
-function journalModel() {
+export function journalModel() {
   return process.env.OPENAI_WORK_RECORD_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
+}
+
+export const journalMaxCompletionTokens = 8192;
+
+type JournalFailureReason =
+  | "HTTP"
+  | "NETWORK"
+  | "TRUNCATED"
+  | "MALFORMED_RESPONSE"
+  | "MALFORMED_JSON"
+  | "SCHEMA_VALIDATION"
+  | "REFUSAL";
+
+class JournalAttemptError extends Error {
+  constructor(
+    readonly reason: JournalFailureReason,
+    readonly retryable: boolean,
+    readonly repairContent: string | null = null
+  ) {
+    super(`Journal structured parse failed: ${reason}`);
+    this.name = "JournalAttemptError";
+  }
+}
+
+export class TelegramJournalParseError extends Error {
+  constructor(readonly reason: JournalFailureReason, readonly attempts: number) {
+    super(`OpenAI telegram_journal_entry parsing failed after ${attempts} attempt(s): ${reason}`);
+    this.name = "TelegramJournalParseError";
+  }
+}
+
+type JournalDiagnostic = {
+  attempt: number;
+  status?: number;
+  finishReason?: string | null;
+  responseLength?: number;
+  contentLength?: number;
+  validationPaths?: Array<{ path: string; code: string }>;
+  apiErrorType?: string | null;
+  apiErrorCode?: string | null;
+  apiErrorParam?: string | null;
+};
+
+function safeApiErrorMetadata(rawResponse: string) {
+  try {
+    const parsed = JSON.parse(rawResponse) as {
+      error?: { type?: unknown; code?: unknown; param?: unknown };
+    };
+    return {
+      apiErrorType: typeof parsed.error?.type === "string" ? parsed.error.type : null,
+      apiErrorCode: typeof parsed.error?.code === "string" ? parsed.error.code : null,
+      apiErrorParam: typeof parsed.error?.param === "string" ? parsed.error.param : null
+    };
+  } catch {
+    return { apiErrorType: null, apiErrorCode: null, apiErrorParam: null };
+  }
+}
+
+function logJournalFailure(reason: JournalFailureReason, details: JournalDiagnostic) {
+  console.error("OpenAI structured parser failure", {
+    parser: "telegram_journal_entry",
+    model: journalModel(),
+    reason,
+    ...details
+  });
 }
 
 async function structuredCompletion(
@@ -112,6 +177,189 @@ async function structuredCompletion(
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== "string") throw new Error(`OpenAI returned an empty ${name}`);
   return JSON.parse(content) as unknown;
+}
+
+async function journalStructuredAttempt(
+  schema: Record<string, unknown>,
+  messages: Array<{ role: "system" | "user"; content: string }>,
+  attempt: number
+) {
+  let response: Response;
+
+  try {
+    response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${openAiApiKey()}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: journalModel(),
+        temperature: 0,
+        max_completion_tokens: journalMaxCompletionTokens,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "telegram_journal_entry",
+            strict: true,
+            schema
+          }
+        },
+        messages
+      }),
+      cache: "no-store"
+    });
+  } catch {
+    logJournalFailure("NETWORK", { attempt });
+    throw new JournalAttemptError("NETWORK", false);
+  }
+
+  const rawResponse = await response.text();
+  if (!response.ok) {
+    logJournalFailure("HTTP", {
+      attempt,
+      status: response.status,
+      responseLength: rawResponse.length,
+      ...safeApiErrorMetadata(rawResponse)
+    });
+    throw new JournalAttemptError("HTTP", false);
+  }
+
+  let data: {
+    choices?: Array<{
+      finish_reason?: string | null;
+      message?: { content?: unknown; refusal?: unknown };
+    }>;
+  };
+  try {
+    data = JSON.parse(rawResponse);
+  } catch {
+    logJournalFailure("MALFORMED_RESPONSE", {
+      attempt,
+      status: response.status,
+      responseLength: rawResponse.length
+    });
+    throw new JournalAttemptError("MALFORMED_RESPONSE", true);
+  }
+
+  const choice = data.choices?.[0];
+  const finishReason = choice?.finish_reason ?? null;
+  const content = choice?.message?.content;
+  const contentLength = typeof content === "string" ? content.length : 0;
+
+  if (finishReason === "length") {
+    logJournalFailure("TRUNCATED", {
+      attempt,
+      status: response.status,
+      finishReason,
+      responseLength: rawResponse.length,
+      contentLength
+    });
+    throw new JournalAttemptError("TRUNCATED", true);
+  }
+
+  if (choice?.message?.refusal) {
+    logJournalFailure("REFUSAL", {
+      attempt,
+      status: response.status,
+      finishReason,
+      responseLength: rawResponse.length,
+      contentLength
+    });
+    throw new JournalAttemptError("REFUSAL", false);
+  }
+
+  if (typeof content !== "string" || !content.trim()) {
+    logJournalFailure("MALFORMED_RESPONSE", {
+      attempt,
+      status: response.status,
+      finishReason,
+      responseLength: rawResponse.length,
+      contentLength
+    });
+    throw new JournalAttemptError("MALFORMED_RESPONSE", true);
+  }
+
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(content);
+  } catch {
+    logJournalFailure("MALFORMED_JSON", {
+      attempt,
+      status: response.status,
+      finishReason,
+      responseLength: rawResponse.length,
+      contentLength
+    });
+    throw new JournalAttemptError("MALFORMED_JSON", true, content);
+  }
+
+  const parsed = telegramJournalSchema.omit({ source: true }).safeParse(parsedJson);
+  if (!parsed.success) {
+    logJournalFailure("SCHEMA_VALIDATION", {
+      attempt,
+      status: response.status,
+      finishReason,
+      responseLength: rawResponse.length,
+      contentLength,
+      validationPaths: parsed.error.issues.slice(0, 8).map((issue) => ({
+        path: issue.path.join(".") || "<root>",
+        code: issue.code
+      }))
+    });
+    throw new JournalAttemptError("SCHEMA_VALIDATION", true, content);
+  }
+
+  return parsed.data;
+}
+
+function journalRepairMessages(content: string) {
+  return [
+    {
+      role: "system" as const,
+      content: [
+        "Исправь только структуру ранее подготовленной дневниковой записи.",
+        "Верни полный результат строго по JSON Schema без markdown и пояснений.",
+        "Не сокращай cleanedText, не добавляй факты и не меняй смысл автора."
+      ].join("\n")
+    },
+    { role: "user" as const, content }
+  ];
+}
+
+function journalRetryMessages(
+  messages: Array<{ role: "system" | "user"; content: string }>
+) {
+  return messages.map((message, index) => index === 0
+    ? {
+        ...message,
+        content: `${message.content}\nЭто повторная попытка: обязательно заверши весь JSON в пределах доступного output budget.`
+      }
+    : message
+  );
+}
+
+async function parseStructuredJournalWithRetry(
+  schema: Record<string, unknown>,
+  messages: Array<{ role: "system" | "user"; content: string }>
+) {
+  let attemptMessages = messages;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      return await journalStructuredAttempt(schema, attemptMessages, attempt);
+    } catch (error) {
+      if (!(error instanceof JournalAttemptError)) throw error;
+      if (attempt === 2 || !error.retryable) {
+        throw new TelegramJournalParseError(error.reason, attempt);
+      }
+      attemptMessages = error.repairContent && error.reason !== "TRUNCATED"
+        ? journalRepairMessages(error.repairContent)
+        : journalRetryMessages(messages);
+    }
+  }
+
+  throw new TelegramJournalParseError("MALFORMED_RESPONSE", 2);
 }
 
 export async function classifyTelegramInput(
@@ -169,7 +417,7 @@ const evidenceJsonSchema = {
     type: "object",
     additionalProperties: false,
     properties: {
-      text: { type: "string", maxLength: 1000 },
+      text: { type: "string", minLength: 1, maxLength: 1000 },
       kind: { type: "string", enum: journalEvidenceKinds }
     },
     required: ["text", "kind"]
@@ -188,16 +436,20 @@ export async function parseTelegramJournal(
   const text = originalText.trim();
   if (!text) return null;
 
-  const parsed = telegramJournalSchema.omit({ source: true }).parse(await structuredCompletion(
-    "telegram_journal_entry",
+  const parsed = await parseStructuredJournalWithRetry(
     {
       type: "object",
       additionalProperties: false,
       properties: {
         entryDate: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
-        cleanedText: { type: "string", maxLength: 15000 },
-        summary: { type: "string", maxLength: 600 },
-        domains: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string", enum: journalDomains } },
+        cleanedText: { type: "string", minLength: 1, maxLength: 15000 },
+        summary: { type: "string", minLength: 1, maxLength: 600 },
+        domains: {
+          type: "array",
+          minItems: 1,
+          maxItems: journalDomains.length,
+          items: { type: "string", enum: journalDomains }
+        },
         keyEvents: evidenceJsonSchema,
         tensions: evidenceJsonSchema,
         decisions: evidenceJsonSchema,
@@ -229,7 +481,7 @@ export async function parseTelegramJournal(
       },
       { role: "user", content: text }
     ]
-  ));
+  );
 
   return {
     ...parsed,
