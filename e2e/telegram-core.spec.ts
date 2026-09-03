@@ -10,6 +10,14 @@ import {
   type TelegramWebhookDependencies
 } from "@/lib/telegram-webhook-core";
 import type { TelegramWorkRecord } from "@/lib/telegram-work-records";
+import {
+  classifyTelegramInput,
+  parseTelegramJournal,
+  type TelegramJournal
+} from "@/lib/journal";
+import { dailyFeedbackModel } from "@/lib/daily-feedback";
+import { splitTelegramMessage, weeklyDeliveryWindow } from "@/lib/weekly-delivery";
+import { weeklyReportIdempotencyKey, weeklyReportModel } from "@/lib/weekly-report";
 
 const action: TelegramDailyAction = {
   type: "WARM_CONTACT",
@@ -31,6 +39,20 @@ const workRecord: TelegramWorkRecord = {
   source: "TELEGRAM_TEXT"
 };
 
+const journalEntry: TelegramJournal = {
+  entryDate: "2026-07-01",
+  source: "TELEGRAM_VOICE",
+  cleanedText: "Сегодня я много думал о работе и своих проектах. Пока не уверен, что нужно резко менять курс.",
+  summary: "Пользователь сопоставляет работу и собственные проекты, но пока не принял решение менять курс.",
+  domains: ["EMPLOYMENT", "OWN_PROJECTS", "INNER_STATE"],
+  keyEvents: [{ text: "Сегодня размышлял о работе и своих проектах", kind: "FACT" }],
+  tensions: [{ text: "Хочется двигать свои проекты, но резкая смена курса пока вызывает сомнение", kind: "USER_INTERPRETATION" }],
+  decisions: null,
+  questions: null,
+  nextStep: null,
+  importance: "NORMAL"
+};
+
 function createDependencies(
   overrides: Partial<TelegramWebhookDependencies> = {}
 ): TelegramWebhookDependencies {
@@ -38,13 +60,21 @@ function createDependencies(
     classifyInput: async () => "ACTION",
     parseAction: async () => action,
     parseWorkRecord: async () => workRecord,
+    parseJournal: async () => journalEntry,
     transcribeVoice: async () => action.note,
     createPending: async () => "pending-id",
     createPendingWorkRecord: async () => "work-pending-id",
+    createPendingJournal: async () => "journal-pending-id",
     cancelPending: async () => true,
     cancelPendingWorkRecord: async () => true,
+    cancelPendingJournal: async () => true,
     savePending: async () => ({ type: action.type, target: action.target }),
     savePendingWorkRecord: async () => true,
+    savePendingJournal: async () => ({
+      id: "journal-id",
+      summary: journalEntry.summary,
+      feedback: "Что я здесь вижу\n\nКороткая обратная связь."
+    }),
     convertPendingWorkRecord: async () => ({ pendingId: "action-pending-id", action }),
     sendMessage: async () => ({}),
     answerCallback: async () => ({}),
@@ -85,6 +115,42 @@ test.describe("Telegram webhook core", () => {
         note: "Написал директору Oceaniq"
       });
       expect(responseFormatType).toBe("json_schema");
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
+  test("defaults an uncertain Telegram classification to Journal", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    global.fetch = async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ kind: "WORK_RECORD", confidence: 0.55 }) } }]
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+    try {
+      await expect(classifyTelegramInput("Я пока не понимаю, чего хочу от этой недели", "TELEGRAM_VOICE")).resolves.toBe("JOURNAL");
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
+  test("parses cleaned first-person Journal data without adding raw transcript fields", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    global.fetch = async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({
+        ...journalEntry,
+        source: undefined
+      }) } }]
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+    try {
+      const parsed = await parseTelegramJournal("Я думаю о работе, но пока не уверен, что нужно резко менять курс.", "TELEGRAM_TEXT");
+      expect(parsed?.cleanedText.startsWith("Сегодня я")).toBeTruthy();
+      expect(parsed?.domains).toContain("EMPLOYMENT");
+      expect(parsed).not.toHaveProperty("rawTranscript");
     } finally {
       global.fetch = originalFetch;
       process.env.OPENAI_API_KEY = originalApiKey;
@@ -322,5 +388,195 @@ test.describe("Telegram webhook core", () => {
     expect(workSaveCount).toBe(0);
     expect(actionSaveCount).toBe(0);
     expect(messages).toContain("Не сохраняю.");
+  });
+
+  test("accepts a voice message up to 300 seconds", async () => {
+    let transcribed = 0;
+    const pendingEntries: TelegramJournal[] = [];
+    await processTelegramUpdate(
+      { message: { chat: { id: "allowed-chat" }, voice: { file_id: "voice-300", duration: 300 } } },
+      "allowed-chat",
+      createDependencies({
+        classifyInput: async () => "JOURNAL",
+        transcribeVoice: async () => {
+          transcribed += 1;
+          return "Свободная дневниковая запись";
+        },
+        createPendingJournal: async (_chatId, entry) => {
+          pendingEntries.push(entry);
+          return "journal-pending-id";
+        }
+      })
+    );
+    expect(transcribed).toBe(1);
+    expect(pendingEntries[0]?.summary).toBe(journalEntry.summary);
+  });
+
+  test("does not persist a raw transcript when voice is classified as Daily Action", async () => {
+    const rawTranscript = "Дословная длинная расшифровка голосового сообщения";
+    const pendingActions: TelegramDailyAction[] = [];
+    await processTelegramUpdate(
+      { message: { chat: { id: "allowed-chat" }, voice: { file_id: "voice-action", duration: 40 } } },
+      "allowed-chat",
+      createDependencies({
+        classifyInput: async () => "ACTION",
+        transcribeVoice: async () => rawTranscript,
+        parseAction: async () => ({ ...action, note: rawTranscript }),
+        createPending: async (_chatId, parsedAction) => {
+          pendingActions.push(parsedAction);
+          return "pending-id";
+        }
+      })
+    );
+    expect(pendingActions[0]?.note).toBe("Добавлено из голосового сообщения");
+    expect(JSON.stringify(pendingActions[0])).not.toContain(rawTranscript);
+  });
+
+  test("rejects a voice message over 300 seconds without transcription", async () => {
+    let transcribed = 0;
+    const messages: string[] = [];
+    await processTelegramUpdate(
+      { message: { chat: { id: "allowed-chat" }, voice: { file_id: "voice-301", duration: 301 } } },
+      "allowed-chat",
+      createDependencies({
+        transcribeVoice: async () => {
+          transcribed += 1;
+          return "Не должно вызываться";
+        },
+        sendMessage: async (_chatId, text) => {
+          messages.push(text);
+          return {};
+        }
+      })
+    );
+    expect(transcribed).toBe(0);
+    expect(messages[0]).toContain("длиннее 5 минут");
+  });
+
+  test("requires confirmation before a JournalEntry is saved and persists no raw fields", async () => {
+    let saved = 0;
+    let pendingEntry: TelegramJournal | null = null;
+    const messages: Array<{ text: string; markup?: unknown }> = [];
+    await processTelegramUpdate(
+      { message: { chat: { id: "allowed-chat" }, text: "Длинная свободная мысль о сегодняшнем дне" } },
+      "allowed-chat",
+      createDependencies({
+        classifyInput: async () => "JOURNAL",
+        parseJournal: async (_text, source) => ({ ...journalEntry, source }),
+        createPendingJournal: async (_chatId, entry) => {
+          pendingEntry = entry;
+          return "journal-pending-id";
+        },
+        savePendingJournal: async () => {
+          saved += 1;
+          return { id: "journal-id", summary: journalEntry.summary };
+        },
+        sendMessage: async (_chatId, text, markup) => {
+          messages.push({ text, markup });
+          return {};
+        }
+      })
+    );
+    expect(saved).toBe(0);
+    expect(messages[0].text).toContain("Дневниковая запись");
+    expect(JSON.stringify(messages[0].markup)).toContain("journal_save:journal-pending-id");
+    expect(Object.keys(pendingEntry ?? {})).not.toContain("rawTranscript");
+    expect(Object.keys(pendingEntry ?? {})).not.toContain("fileId");
+    expect(Object.keys(pendingEntry ?? {})).not.toContain("audio");
+  });
+
+  test("Journal cancel creates no entry and Save sends feedback only after confirmation", async () => {
+    let saved = 0;
+    let canceled = 0;
+    const messages: string[] = [];
+    const dependencies = createDependencies({
+      cancelPendingJournal: async () => {
+        canceled += 1;
+        return true;
+      },
+      savePendingJournal: async () => {
+        saved += 1;
+        return { id: "journal-id", summary: journalEntry.summary, feedback: "Что я здесь вижу\n\nФакт подтвержден." };
+      },
+      sendMessage: async (_chatId, text) => {
+        messages.push(text);
+        return {};
+      }
+    });
+    await processTelegramUpdate(
+      { callback_query: { id: "journal-cancel", data: "journal_cancel:journal-pending-id", message: { chat: { id: "allowed-chat" } } } },
+      "allowed-chat",
+      dependencies
+    );
+    expect(canceled).toBe(1);
+    expect(saved).toBe(0);
+    expect(messages).not.toContain("Что я здесь вижу\n\nФакт подтвержден.");
+
+    await processTelegramUpdate(
+      { callback_query: { id: "journal-save", data: "journal_save:journal-pending-id", message: { chat: { id: "allowed-chat" } } } },
+      "allowed-chat",
+      dependencies
+    );
+    expect(saved).toBe(1);
+    expect(messages).toContain("Что я здесь вижу\n\nФакт подтвержден.");
+  });
+
+  test("uses the dedicated daily feedback model fallback chain", () => {
+    const previous = {
+      feedback: process.env.OPENAI_DAILY_FEEDBACK_MODEL,
+      work: process.env.OPENAI_WORK_RECORD_MODEL,
+      common: process.env.OPENAI_MODEL
+    };
+    try {
+      process.env.OPENAI_DAILY_FEEDBACK_MODEL = "daily-model";
+      process.env.OPENAI_WORK_RECORD_MODEL = "work-model";
+      process.env.OPENAI_MODEL = "common-model";
+      expect(dailyFeedbackModel()).toBe("daily-model");
+      delete process.env.OPENAI_DAILY_FEEDBACK_MODEL;
+      expect(dailyFeedbackModel()).toBe("work-model");
+      delete process.env.OPENAI_WORK_RECORD_MODEL;
+      expect(dailyFeedbackModel()).toBe("common-model");
+    } finally {
+      process.env.OPENAI_DAILY_FEEDBACK_MODEL = previous.feedback;
+      process.env.OPENAI_WORK_RECORD_MODEL = previous.work;
+      process.env.OPENAI_MODEL = previous.common;
+    }
+  });
+
+  test("splits long weekly reports safely and detects a configured delivery window", () => {
+    const report = Array.from({ length: 12 }, (_, index) => `Раздел ${index + 1}\n${"текст ".repeat(90)}`).join("\n\n");
+    const parts = splitTelegramMessage(report, 900);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.every((part) => part.length <= 900)).toBeTruthy();
+    expect(weeklyDeliveryWindow(
+      { enabled: true, timezone: "UTC", weekday: 3, localTime: "10:00" },
+      new Date("2026-07-01T10:20:00Z")
+    )).toBe("2026-07-01");
+    expect(weeklyReportIdempotencyKey("user-1", new Date("2026-07-01T12:00:00Z")))
+      .toBe(weeklyReportIdempotencyKey("user-1", new Date("2026-07-05T12:00:00Z")));
+    expect(weeklyReportIdempotencyKey("user-1", new Date("2026-07-06T12:00:00Z")))
+      .not.toBe(weeklyReportIdempotencyKey("user-1", new Date("2026-07-05T12:00:00Z")));
+  });
+
+  test("uses a weekly model chain independent from daily feedback", () => {
+    const previous = {
+      weekly: process.env.OPENAI_WEEKLY_REPORT_MODEL,
+      advisor: process.env.OPENAI_ADVISOR_MODEL,
+      common: process.env.OPENAI_MODEL
+    };
+    try {
+      process.env.OPENAI_WEEKLY_REPORT_MODEL = "weekly-model";
+      process.env.OPENAI_ADVISOR_MODEL = "advisor-model";
+      process.env.OPENAI_MODEL = "common-model";
+      expect(weeklyReportModel()).toBe("weekly-model");
+      delete process.env.OPENAI_WEEKLY_REPORT_MODEL;
+      expect(weeklyReportModel()).toBe("advisor-model");
+      delete process.env.OPENAI_ADVISOR_MODEL;
+      expect(weeklyReportModel()).toBe("common-model");
+    } finally {
+      process.env.OPENAI_WEEKLY_REPORT_MODEL = previous.weekly;
+      process.env.OPENAI_ADVISOR_MODEL = previous.advisor;
+      process.env.OPENAI_MODEL = previous.common;
+    }
   });
 });

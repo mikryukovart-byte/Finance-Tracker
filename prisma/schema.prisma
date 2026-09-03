@@ -66,19 +66,19 @@ model Account {
 }
 
 model Transaction {
-  id          String   @id @default(cuid())
-  userId      String
-  amount      Float
-  type        String
-  date        DateTime
-  description String?
-  categoryId  String?
-  accountId   String?
-  category    Category? @relation(fields: [categoryId, userId], references: [id, userId], onDelete: Restrict)
-  account     Account? @relation(fields: [accountId, userId], references: [id, userId], onDelete: Restrict)
+  id           String        @id @default(cuid())
+  userId       String
+  amount       Float
+  type         String
+  date         DateTime
+  description  String?
+  categoryId   String?
+  accountId    String?
+  category     Category?     @relation(fields: [categoryId, userId], references: [id, userId], onDelete: Restrict)
+  account      Account?      @relation(fields: [accountId, userId], references: [id, userId], onDelete: Restrict)
   loanPayments LoanPayment[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 
   @@index([userId, date])
   @@index([userId, type])
@@ -90,9 +90,9 @@ model Transaction {
 }
 
 model Loan {
-  id              String   @id @default(cuid())
+  id              String        @id @default(cuid())
   userId          String
-  debtType        String   @default("BANK_LOAN")
+  debtType        String        @default("BANK_LOAN")
   title           String
   lender          String?
   initialAmount   Float?
@@ -105,12 +105,12 @@ model Loan {
   gracePeriodDays Int?
   paymentDate     DateTime?
   accountId       String?
-  account         Account? @relation(fields: [accountId, userId], references: [id, userId], onDelete: Restrict)
-  priority        String   @default("MEDIUM")
-  status          String   @default("ACTIVE")
+  account         Account?      @relation(fields: [accountId, userId], references: [id, userId], onDelete: Restrict)
+  priority        String        @default("MEDIUM")
+  status          String        @default("ACTIVE")
   payments        LoanPayment[]
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
   @@index([userId, status])
   @@index([userId, debtType])
@@ -157,19 +157,19 @@ model LoanPayment {
 }
 
 model AnnualGoalPlan {
-  id         String          @id @default(cuid())
-  userId     String
-  year       Int
-  pointA     Float           @default(0)
-  pointAMode String          @default("AUTO")
-  planStartDate DateTime     @default(now())
-  c1Target   Float           @default(0)
-  c2Target   Float           @default(0)
-  c3Target   Float           @default(0)
-  growthMode String          @default("LINEAR")
-  rows       AnnualGoalRow[]
-  createdAt  DateTime        @default(now())
-  updatedAt  DateTime        @updatedAt
+  id            String          @id @default(cuid())
+  userId        String
+  year          Int
+  pointA        Float           @default(0)
+  pointAMode    String          @default("AUTO")
+  planStartDate DateTime        @default(now())
+  c1Target      Float           @default(0)
+  c2Target      Float           @default(0)
+  c3Target      Float           @default(0)
+  growthMode    String          @default("LINEAR")
+  rows          AnnualGoalRow[]
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
 
   @@unique([userId, year])
   @@index([userId, year])
@@ -252,7 +252,7 @@ model WeeklyHypothesis {
 }
 
 model DailyActionLog {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   userId        String
   date          DateTime
   weekStartDate DateTime
@@ -262,8 +262,8 @@ model DailyActionLog {
   nextStep      String?
   note          String?
   deletedAt     DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([userId, date])
   @@index([userId, weekStartDate])
@@ -306,18 +306,23 @@ model WorkRecord {
 }
 
 model AdvisorReport {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   userId          String
-  periodStart     DateTime @db.Date
-  periodEnd       DateTime @db.Date
+  periodStart     DateTime  @db.Date
+  periodEnd       DateTime  @db.Date
   content         String
   model           String
-  source          String   @default("ai")
+  source          String    @default("ai")
+  reportKind      String    @default("ON_DEMAND")
+  idempotencyKey  String?   @unique
+  deliveredAt     DateTime?
   contextSnapshot Json?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime  @default(now())
 
   @@index([userId, createdAt])
   @@index([userId, periodStart, periodEnd])
+  @@index([userId, reportKind, createdAt])
+  @@index([userId, reportKind, periodStart, periodEnd])
 }
 
 model TelegramPendingWorkRecord {
@@ -329,4 +334,70 @@ model TelegramPendingWorkRecord {
 
   @@index([chatId, expiresAt])
   @@index([expiresAt])
+}
+
+model JournalEntry {
+  id            String    @id @default(cuid())
+  userId        String
+  entryDate     DateTime  @db.Date
+  source        String
+  cleanedText   String
+  summary       String
+  domains       Json
+  keyEvents     Json?
+  tensions      Json?
+  decisions     Json?
+  questions     Json?
+  nextStep      String?
+  importance    String    @default("NORMAL")
+  dailyFeedback String?
+  feedbackModel String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  @@index([userId, entryDate])
+  @@index([userId, createdAt])
+  @@index([userId, deletedAt])
+  @@index([userId, entryDate, deletedAt])
+}
+
+model TelegramPendingJournal {
+  id        String   @id @default(cuid())
+  chatId    String
+  payload   Json
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([chatId, expiresAt])
+  @@index([expiresAt])
+}
+
+model LifeContext {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  currentSituation String   @default("")
+  priorities       Json
+  constraints      Json
+  activeProjects   Json
+  deliberatePauses Json
+  activeDecisions  Json
+  notes            String   @default("")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model WeeklyDeliverySettings {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  enabled   Boolean  @default(false)
+  timezone  String
+  weekday   Int
+  localTime String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
 }

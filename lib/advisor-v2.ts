@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 
 import { endOfDay, endOfWeek, startOfDay, startOfWeek } from "@/lib/date-ranges";
 import { getAdvisorSummary } from "@/lib/advisor";
+import { normalizeLifeContext, type LifeContextValue } from "@/lib/life-context";
 import { prisma } from "@/lib/prisma";
 import type {
   AdvisorReport,
@@ -12,18 +13,19 @@ import type {
   WorkRecordType
 } from "@/types/finance";
 
-const reportHeadings = [
-  "Картина периода",
-  "Деньги и обязательства",
-  "Цели: план против реальности",
-  "Работа, продажи и действия",
-  "Гипотезы",
-  "Что ты сам фиксировал",
+const advisorSectionPool = [
+  "Где ты сейчас",
+  "Работа и собственные проекты",
+  "Деньги",
+  "Тело и состояние",
+  "Отношения и люди",
+  "Внутренняя жизнь",
+  "Что реально двигалось",
+  "Что повторяется",
+  "Где ты изменился",
   "Противоречия",
-  "Главный ограничитель",
-  "Решения на следующие 7 дней",
-  "Что сознательно не делать",
-  "Что проверить в следующем разборе"
+  "Главный вопрос",
+  "На следующие 7 дней"
 ] as const;
 
 const actionTypes: DailyActionType[] = [
@@ -45,6 +47,8 @@ type AdvisorReportRow = {
   content: string;
   model: string;
   source: string;
+  reportKind: string;
+  deliveredAt: Date | null;
   contextSnapshot: Prisma.JsonValue | null;
   createdAt: Date;
 };
@@ -143,6 +147,33 @@ export type AdvisorContext = {
     risk: string | null;
     nextStep: string | null;
   }>;
+  lifeContext: LifeContextValue;
+  journal: {
+    last7Days: Array<{
+      date: string;
+      cleanedTextExcerpt: string;
+      summary: string;
+      domains: Prisma.JsonValue;
+      keyEvents: Prisma.JsonValue | null;
+      tensions: Prisma.JsonValue | null;
+      decisions: Prisma.JsonValue | null;
+      questions: Prisma.JsonValue | null;
+      nextStep: string | null;
+    }>;
+    days8To30: Array<{
+      date: string;
+      summary: string;
+      domains: Prisma.JsonValue;
+      keyEvents: Prisma.JsonValue | null;
+      tensions: Prisma.JsonValue | null;
+      decisions: Prisma.JsonValue | null;
+      questions: Prisma.JsonValue | null;
+      nextStep: string | null;
+    }>;
+    totalLast7Days: number;
+    totalLast30Days: number;
+    selectionRule: string;
+  };
   previousReview: PreviousReview;
   dataQuality: AdvisorSummary["dataQuality"] & {
     interpretationRule: string;
@@ -177,6 +208,8 @@ function toAdvisorReport(row: AdvisorReportRow): AdvisorReport {
     content: row.content,
     model: row.model,
     source: row.source === "ai" ? "ai" : "rules",
+    reportKind: row.reportKind === "WEEKLY" ? "WEEKLY" : "ON_DEMAND",
+    deliveredAt: row.deliveredAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString()
   };
 }
@@ -217,9 +250,9 @@ function extractReportSections(content: string) {
   );
 }
 
-async function getLatestAdvisorReportRow(userId: string) {
+async function getLatestAdvisorReportRow(userId: string, reportKind = "ON_DEMAND") {
   return prisma.advisorReport.findFirst({
-    where: { userId },
+    where: { userId, reportKind },
     select: {
       id: true,
       periodStart: true,
@@ -227,6 +260,8 @@ async function getLatestAdvisorReportRow(userId: string) {
       content: true,
       model: true,
       source: true,
+      reportKind: true,
+      deliveredAt: true,
       contextSnapshot: true,
       createdAt: true
     },
@@ -269,8 +304,20 @@ export async function buildAdvisorContext(
     now.getMonth(),
     now.getDate() - 29
   );
+  const journalDetailedStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+  const journalCompactStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29);
 
-  const [summary, previousReport, priorActions, recentHypotheses, workRecords, transfers] =
+  const [
+    summary,
+    previousReport,
+    priorActions,
+    recentHypotheses,
+    workRecords,
+    transfers,
+    lifeContextRow,
+    detailedJournal,
+    compactJournal
+  ] =
     await Promise.all([
       getAdvisorSummary(userId),
       getLatestAdvisorReportRow(userId),
@@ -345,6 +392,46 @@ export async function buildAdvisorContext(
         },
         orderBy: [{ date: "desc" }, { createdAt: "desc" }],
         take: 30
+      }),
+      prisma.lifeContext.findUnique({ where: { userId } }),
+      prisma.journalEntry.findMany({
+        where: {
+          userId,
+          deletedAt: null,
+          entryDate: { gte: startOfDay(journalDetailedStart), lt: endOfDay(now) }
+        },
+        select: {
+          entryDate: true,
+          cleanedText: true,
+          summary: true,
+          domains: true,
+          keyEvents: true,
+          tensions: true,
+          decisions: true,
+          questions: true,
+          nextStep: true
+        },
+        orderBy: [{ entryDate: "desc" }, { createdAt: "desc" }],
+        take: 24
+      }),
+      prisma.journalEntry.findMany({
+        where: {
+          userId,
+          deletedAt: null,
+          entryDate: { gte: startOfDay(journalCompactStart), lt: startOfDay(journalDetailedStart) }
+        },
+        select: {
+          entryDate: true,
+          summary: true,
+          domains: true,
+          keyEvents: true,
+          tensions: true,
+          decisions: true,
+          questions: true,
+          nextStep: true
+        },
+        orderBy: [{ entryDate: "desc" }, { createdAt: "desc" }],
+        take: 36
       })
     ]);
 
@@ -489,6 +576,33 @@ export async function buildAdvisorContext(
         risk: record.risk,
         nextStep: record.nextStep
       })),
+      lifeContext: normalizeLifeContext(lifeContextRow),
+      journal: {
+        last7Days: detailedJournal.map((entry) => ({
+          date: dateOnly(entry.entryDate),
+          cleanedTextExcerpt: entry.cleanedText.slice(0, 2200),
+          summary: entry.summary,
+          domains: entry.domains,
+          keyEvents: entry.keyEvents,
+          tensions: entry.tensions,
+          decisions: entry.decisions,
+          questions: entry.questions,
+          nextStep: entry.nextStep
+        })),
+        days8To30: compactJournal.map((entry) => ({
+          date: dateOnly(entry.entryDate),
+          summary: entry.summary,
+          domains: entry.domains,
+          keyEvents: entry.keyEvents,
+          tensions: entry.tensions,
+          decisions: entry.decisions,
+          questions: entry.questions,
+          nextStep: entry.nextStep
+        })),
+        totalLast7Days: detailedJournal.length,
+        totalLast30Days: detailedJournal.length + compactJournal.length,
+        selectionRule: "7 дней подробно; 8–30 дней без cleanedText; максимум 60 записей."
+      },
       previousReview: buildPreviousReview(previousReport),
       dataQuality: {
         ...summary.dataQuality,
@@ -515,11 +629,14 @@ function buildContextSnapshot(context: AdvisorContext): Prisma.InputJsonObject {
     proposals: context.actions.currentWeek.actionCounts.proposals,
     priceNamed: context.actions.currentWeek.actionCounts.priceNamed,
     hypotheses: context.actions.currentWeek.hypothesisCount,
-    workRecords: context.workRecords.length
+    workRecords: context.workRecords.length,
+    journalEntries7Days: context.journal.totalLast7Days,
+    journalEntries30Days: context.journal.totalLast30Days,
+    lifeContextUpdatedAt: context.lifeContext.updatedAt
   };
 }
 
-function buildFallbackReport(context: AdvisorContext) {
+function buildLegacyFallbackReport(context: AdvisorContext) {
   const { finances, goals, actions, hypotheses, workRecords, previousReview } = context;
   const counts = actions.currentWeek.actionCounts;
   const overLimit = finances.creditCards.filter((card) => card.overLimit > 0);
@@ -642,24 +759,115 @@ function buildFallbackReport(context: AdvisorContext) {
   ].join("\n\n");
 }
 
+function buildFallbackReport(context: AdvisorContext) {
+  const { finances, goals, actions, hypotheses, workRecords, journal, lifeContext } = context;
+  const counts = actions.currentWeek.actionCounts;
+  const overLimit = finances.creditCards.reduce((sum, card) => sum + card.overLimit, 0);
+  const latestJournal = journal.last7Days[0];
+  const activeDecisions = lifeContext.activeDecisions.filter((decision) => decision.status === "ACTIVE");
+  const activeHypothesis = hypotheses.find((item) => item.status === "ACTIVE" || item.status === "PLANNED");
+  const moneyChangesDecision = finances.ownMoney < 1000 || overLimit > 0 || finances.currentMonth.cashFlow < 0;
+  const executionIsThin = actions.currentWeek.actionCount < 6;
+  const deliberatePause = lifeContext.deliberatePauses.length > 0;
+  const summary = [
+    `Факт: на собственных счетах ${formatRub(finances.ownMoney)}, долг ${formatRub(finances.totalDebt)}, денежный поток месяца ${formatRub(finances.currentMonth.cashFlow)}.`,
+    `Факт: за неделю записано ${actions.currentWeek.actionCount} действий и ${journal.totalLast7Days} дневниковых записей.`,
+    latestJournal
+      ? `Факт: последняя дневниковая запись сформулирована так: «${latestJournal.summary}».`
+      : "Неизвестно: дневниковых записей за последние семь дней нет, поэтому внутренний контекст периода виден не полностью.",
+    activeDecisions.length
+      ? `Факт: действует решение «${activeDecisions[0].text}»; рекомендации не должны ему противоречить без новых существенных данных.`
+      : "Неизвестно: в текущем контексте не указаны действующие решения, ограничивающие выбор.",
+    deliberatePause
+      ? `Интерпретация: отсутствие действий по части направлений нельзя считать провалом — сознательно на паузе: ${lifeContext.deliberatePauses.slice(0, 2).join("; ")}.`
+      : executionIsThin
+        ? `Интерпретация: ${actions.currentWeek.actionCount} зафиксированных действий недостаточно, чтобы уверенно судить о качестве стратегии; это также не доказывает, что другой работы не было.`
+        : "Интерпретация: объема действий достаточно, чтобы разбирать качество переходов между этапами, а не только количество.",
+    moneyChangesDecision
+      ? "Интерпретация: финансовая ситуация сейчас меняет допустимые решения и поэтому должна оставаться явным ограничением."
+      : "Интерпретация: финансы сейчас не дают отдельного сигнала для резкой смены курса."
+  ];
+
+  const sections = [
+    "# Короткий вывод",
+    summary.join(" "),
+    "",
+    "# Где ты сейчас",
+    lifeContext.currentSituation
+      ? `Факт: текущая ситуация описана так: ${lifeContext.currentSituation}`
+      : "Неизвестно: поле текущей ситуации не заполнено; выводы опираются только на записи и действия.",
+    lifeContext.priorities.length
+      ? `Факт: обозначенные приоритеты — ${lifeContext.priorities.join("; ")}.`
+      : "Неизвестно: явные приоритеты не зафиксированы.",
+    "",
+    "# Что реально двигалось",
+    `Факт: воронка недели — ${counts.firstTouches} первых касаний, ${counts.followUps} follow-up, ${counts.calls} звонков, ${counts.proposals} КП и ${counts.priceNamed} названных цен.`,
+    workRecords[0]
+      ? `Факт: последняя рабочая запись «${workRecords[0].title}»: ${workRecords[0].summary}`
+      : "Неизвестно: свежих WorkRecord недостаточно для сопоставления намерений и исполнения.",
+    activeHypothesis
+      ? `Факт: проверяется гипотеза «${activeHypothesis.title}»; фактический результат: ${activeHypothesis.actualResult ?? "не записан"}.`
+      : "Неизвестно: активная проверяемая гипотеза не зафиксирована."
+  ];
+
+  if (latestJournal?.tensions || (goals.currentMonthlyGap ?? 0) > 0) {
+    sections.push(
+      "",
+      "# Противоречия",
+      latestJournal?.tensions
+        ? `Факт: в дневнике отмечено напряжение: ${JSON.stringify(latestJournal.tensions)}.`
+        : `Факт: разрыв к активной месячной цели составляет ${formatRub(goals.currentMonthlyGap ?? 0)}.`,
+      "Интерпретация: это повод проверить согласованность цели, доступного времени и фактического способа работы, а не делать вывод о личных качествах."
+    );
+  }
+
+  if (moneyChangesDecision) {
+    sections.push(
+      "",
+      "# Деньги",
+      overLimit > 0
+        ? `Факт: превышение лимита кредитных карт составляет ${formatRub(overLimit)}; доступный кредит не является собственными деньгами.`
+        : `Факт: безопасный дневной лимит по собственным деньгам — ${formatRub(Math.max(0, finances.cashRunway.safeDailyLimit))}.`,
+      `Факт: обязательные платежи до конца месяца — ${formatRub(finances.mandatoryPaymentsBeforeMonthEnd)}.`
+    );
+  }
+
+  const nextSteps: string[] = [];
+  if (overLimit > 0) nextSteps.push(`Закрыть превышение лимита ${formatRub(overLimit)} до новых необязательных трат.`);
+  if (!deliberatePause && executionIsThin) nextSteps.push("Провести одну измеримую проверку: минимум 3 первых касания и 3 follow-up с записанным следующим шагом.");
+  if (activeHypothesis && !activeHypothesis.actualResult) nextSteps.push(`Записать фактический результат гипотезы «${activeHypothesis.title}», не меняя одновременно аудиторию, оффер и канал.`);
+
+  sections.push(
+    "",
+    "# На следующие 7 дней",
+    ...(nextSteps.length
+      ? nextSteps.slice(0, 3).map((item, index) => `${index + 1}. ${item}`)
+      : ["На этой неделе я бы ничего принципиально не менял. Продолжай собирать факты по текущему курсу."])
+  );
+  return sections.join("\n\n");
+}
+
 export function validateAdvisorReport(content: string, context: AdvisorContext) {
   const issues: string[] = [];
 
-  for (const heading of reportHeadings) {
-    if (!new RegExp(`^#{1,3}\\s+${heading.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*$`, "mi").test(content)) {
-      issues.push(`Нет раздела «${heading}»`);
-    }
+  if (!/^#\s+Короткий вывод\s*$/m.test(content.trim())) {
+    issues.push("Отчет должен начинаться с раздела «Короткий вывод»");
   }
 
   const evidenceCount =
     context.actions.recentEightWeeks.total +
     context.hypotheses.length +
     context.workRecords.length +
+    context.journal.totalLast30Days +
     context.finances.majorExpenseCategories.length;
-  const minimumLength = evidenceCount >= 8 ? 6000 : 2200;
+  const wordCount = content.trim().split(/\s+/).length;
+  const minimumWords = evidenceCount >= 8 ? 350 : 180;
 
-  if (content.trim().length < minimumLength) {
-    issues.push(`Разбор слишком короткий для объема данных: ${content.trim().length} символов`);
+  if (wordCount < minimumWords) {
+    issues.push(`Разбор слишком короткий для объема данных: ${wordCount} слов`);
+  }
+  if (wordCount > 1250) {
+    issues.push(`Разбор длиннее 1250 слов: ${wordCount}`);
   }
 
   if (!/Факт:/i.test(content) || !/Интерпретация:/i.test(content) || !/Неизвестно:/i.test(content)) {
@@ -703,16 +911,18 @@ function advisorMessages(context: AdvisorContext, qualityFeedback: string[] = []
     {
       role: "system",
       content: [
-        "Ты аналитический операционный партнер в персональном survival finance tracker.",
-        "Подготовь серьезный еженедельный стратегический разбор на русском языке.",
+        "Ты аналитический operating partner и интеллектуальное зеркало пользователя.",
+        "Подготовь глубокий, но сжатый стратегический разбор на русском языке.",
         "Не мотивируй, не хвали, не морализируй и не ставь психологических диагнозов.",
         "Каждый важный вывод должен опираться на конкретные данные из контекста.",
         "Явно различай: «Факт:» — данные трекера; «Интерпретация:» — правдоподобное объяснение нескольких фактов; «Неизвестно:» — вывод, который нельзя сделать по данным.",
         "Не выдумывай доход, клиентов, обязательства, мотивы, даты, конверсии и причинные связи.",
         "Доступный кредит и кредитный лимит не являются собственными деньгами. Переводы между своими счетами и погашение тела кредита не являются расходом.",
-        "Цели — план, а не фактический доход. WorkRecord — зафиксированное наблюдение пользователя, а не психологический профиль.",
-        "Ищи одну главную причинную цепочку: финансовое давление → цель и разрыв → объем и качество действий → гипотезы → наблюдения WorkRecord.",
-        "Определи один главный ограничитель и не более трех приоритетов на семь дней.",
+        "Цели — план, а не фактический доход. WorkRecord и JournalEntry — слова пользователя, а не психологический профиль.",
+        "Учитывай LifeContext: сознательная пауза не является бездействием, а действующее решение нельзя отменять советом без новых существенных данных.",
+        "Паттерн можно называть только при нескольких временных evidence points. Отсутствие записи не доказывает отсутствие работы или события.",
+        "Финансы анализируй полностью внутри, но выводи только факты, которые реально меняют решение.",
+        "Определи главный вопрос и не более трех рекомендаций. Допустимо завершить: «На этой неделе я бы ничего принципиально не менял».",
         "Не используй советы вроде «трать меньше», «увеличь доход» или «работай усерднее» без суммы, факта, конкретного действия и срока.",
         "Перед ответом проведи внутреннюю проверку: для каждой рекомендации назови себе факт, который делает ее специфичной этому пользователю сейчас. Удали рекомендацию, если такого факта нет.",
         "Верни только отчет в Markdown. Не добавляй вступление вне отчета."
@@ -721,11 +931,11 @@ function advisorMessages(context: AdvisorContext, qualityFeedback: string[] = []
     {
       role: "user",
       content: [
-        "Собери один связный аналитический отчет приблизительно на 1500–4000 слов, если данных достаточно. Если данных мало, пиши короче и прямо перечисли, чего не хватает.",
-        "Используй строго эти заголовки и этот порядок:",
-        ...reportHeadings.map((heading) => `# ${heading}`),
-        "В разделе «Решения на следующие 7 дней» дай максимум три приоритета. Для каждого укажи конкретный результат, измеримый опережающий индикатор, срок и основание в данных.",
-        "В разделе «Что проверить в следующем разборе» укажи наблюдения, которые подтвердят или опровергнут текущие выводы.",
+        "Начни строго с «# Короткий вывод»: 5–10 предложений, которые дают около 70% пользы всего разбора.",
+        "При достаточном количестве важных событий пиши 800–1200 слов. Если данных или изменений мало — 400–700 слов.",
+        "После короткого вывода используй только действительно релевантные разделы из пула:",
+        ...advisorSectionPool.map((heading) => `# ${heading}`),
+        "Не создавай пустые разделы ради шаблона. В «На следующие 7 дней» дай максимум три решения; не создавай искусственные action items.",
         "Сопоставь предыдущий разбор с текущим периодом: что изменилось, что повторяется и какая рекомендация могла остаться невыполненной. Если предыдущего разбора нет, прямо скажи это.",
         qualityCorrection,
         "Нормализованный AdvisorContext:",
@@ -745,8 +955,8 @@ async function requestOpenAiReport(
     model,
     messages: advisorMessages(context, qualityFeedback),
     ...(reasoningModel
-      ? { reasoning_effort: "high", max_completion_tokens: 12000 }
-      : { temperature: 0.1, max_tokens: 9000 })
+      ? { reasoning_effort: "high", max_completion_tokens: 5000 }
+      : { temperature: 0.1, max_tokens: 3500 })
   };
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -859,6 +1069,7 @@ export async function generateAdvisorReview(
       content: generated.content,
       model: generated.model,
       source: generated.source,
+      reportKind: "ON_DEMAND",
       contextSnapshot: buildContextSnapshot(context)
     },
     select: {
@@ -868,6 +1079,8 @@ export async function generateAdvisorReview(
       content: true,
       model: true,
       source: true,
+      reportKind: true,
+      deliveredAt: true,
       contextSnapshot: true,
       createdAt: true
     }

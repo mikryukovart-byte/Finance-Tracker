@@ -280,6 +280,8 @@ export type AdvisorReport = {
   content: string;
   model: string;
   source: "ai" | "rules";
+  reportKind: "ON_DEMAND" | "WEEKLY";
+  deliveredAt: string | null;
   createdAt: string;
 };
 

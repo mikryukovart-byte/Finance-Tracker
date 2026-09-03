@@ -4,6 +4,7 @@ import { RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { EmptyState } from "@/components/empty-state";
+import { AdvisorContextPanel } from "@/components/advisor-context-panel";
 import { Notice } from "@/components/notice";
 import { PageHeader } from "@/components/page-header";
 import {
@@ -202,6 +203,8 @@ export function AdvisorClient() {
       />
 
       <Notice message={message} tone={messageTone} />
+
+      <AdvisorContextPanel />
 
       {loading && !summary ? (
         <p className="mt-6 text-sm text-muted">Загрузка...</p>

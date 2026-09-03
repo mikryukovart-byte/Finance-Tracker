@@ -109,44 +109,6 @@ async function structuredCompletion(
   return JSON.parse(content) as unknown;
 }
 
-export async function classifyTelegramWorkInput(
-  originalText: string
-): Promise<"ACTION" | "WORK_RECORD"> {
-  const text = originalText.trim();
-
-  if (!text) {
-    return "WORK_RECORD";
-  }
-
-  const parsed = z
-    .object({ kind: z.enum(["ACTION", "WORK_RECORD"]) })
-    .parse(
-      await structuredCompletion(
-        "telegram_input_kind",
-        {
-          type: "object",
-          additionalProperties: false,
-          properties: { kind: { type: "string", enum: ["ACTION", "WORK_RECORD"] } },
-          required: ["kind"]
-        },
-        [
-          {
-            role: "system",
-            content: [
-              "Определи назначение сообщения для личного рабочего трекера.",
-              "ACTION — только явно совершённое конкретное деловое действие: касание, follow-up, контакт, созвон, отправленное предложение или названная цена.",
-              "WORK_RECORD — заметка, мысль, решение, риск, идея, рефлексия, план, гипотеза, намерение или возможное будущее действие.",
-              "Если сообщение неоднозначно, выбирай WORK_RECORD. Не придумывай совершённое действие и не трактуй финансовые суммы как транзакции."
-            ].join("\n")
-          },
-          { role: "user", content: text }
-        ]
-      )
-    );
-
-  return parsed.kind;
-}
-
 function nullableText(value: string | null) {
   return value?.trim() || null;
 }

@@ -63,7 +63,7 @@ export async function downloadTelegramVoice(botToken: string, fileId: string) {
     throw new Error("Telegram did not return a voice file path");
   }
 
-  if (file.file_size && file.file_size > 10 * 1024 * 1024) {
+  if (file.file_size && file.file_size > 20 * 1024 * 1024) {
     throw new Error("VOICE_TOO_LARGE");
   }
 
@@ -78,7 +78,7 @@ export async function downloadTelegramVoice(botToken: string, fileId: string) {
 
   const blob = await response.blob();
 
-  if (blob.size > 10 * 1024 * 1024) {
+  if (blob.size > 20 * 1024 * 1024) {
     throw new Error("VOICE_TOO_LARGE");
   }
 

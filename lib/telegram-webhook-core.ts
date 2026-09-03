@@ -7,6 +7,13 @@ import {
   type TelegramWorkRecord,
   type TelegramWorkRecordSource
 } from "@/lib/telegram-work-records";
+import {
+  journalDomainLabels,
+  journalPreviewThoughts,
+  type TelegramInputKind,
+  type TelegramJournal,
+  type TelegramJournalSource
+} from "@/lib/journal";
 
 export type TelegramUpdate = {
   message?: {
@@ -28,19 +35,32 @@ export type TelegramUpdate = {
 export type TelegramSavedAction = Pick<TelegramDailyAction, "type" | "target">;
 
 export type TelegramWebhookDependencies = {
-  classifyInput(text: string): Promise<"ACTION" | "WORK_RECORD">;
+  classifyInput(
+    text: string,
+    source: Extract<TelegramJournalSource, "TELEGRAM_TEXT" | "TELEGRAM_VOICE">
+  ): Promise<TelegramInputKind>;
   parseAction(text: string): Promise<TelegramDailyAction | null>;
   parseWorkRecord(
     text: string,
     source: Extract<TelegramWorkRecordSource, "TELEGRAM_TEXT" | "TELEGRAM_VOICE">
   ): Promise<TelegramWorkRecord | null>;
+  parseJournal(
+    text: string,
+    source: Extract<TelegramJournalSource, "TELEGRAM_TEXT" | "TELEGRAM_VOICE">
+  ): Promise<TelegramJournal | null>;
   transcribeVoice(fileId: string): Promise<string>;
   createPending(chatId: string, action: TelegramDailyAction): Promise<string>;
   createPendingWorkRecord(chatId: string, record: TelegramWorkRecord): Promise<string>;
+  createPendingJournal(chatId: string, entry: TelegramJournal): Promise<string>;
   cancelPending(chatId: string, pendingId: string): Promise<boolean>;
   cancelPendingWorkRecord(chatId: string, pendingId: string): Promise<boolean>;
+  cancelPendingJournal(chatId: string, pendingId: string): Promise<boolean>;
   savePending(chatId: string, pendingId: string): Promise<TelegramSavedAction | null>;
   savePendingWorkRecord(chatId: string, pendingId: string): Promise<boolean>;
+  savePendingJournal(
+    chatId: string,
+    pendingId: string
+  ): Promise<{ id: string; summary: string; feedback?: string } | null>;
   convertPendingWorkRecord(
     chatId: string,
     pendingId: string
@@ -56,7 +76,7 @@ export type TelegramWebhookDependencies = {
 };
 
 const unclearMessage =
-  "Не понял, какое действие записать. Скажи коротко: что сделал, кому, почему это важно и следующий шаг.";
+  "Не смог уверенно разобрать сообщение. Попробуй сформулировать мысль ещё раз или отправь её текстом.";
 const voiceFailureMessage =
   "Не смог разобрать голосовое. Попробуй короче или отправь текстом.";
 
@@ -101,8 +121,28 @@ export function workRecordConfirmationText(record: TelegramWorkRecord) {
   return lines.join("\n");
 }
 
+export function journalConfirmationText(entry: TelegramJournal) {
+  const thoughts = journalPreviewThoughts(entry);
+  const decisions = entry.decisions?.map((item) => item.text).slice(0, 2) ?? [];
+  const lines = [
+    "Дневниковая запись",
+    "",
+    `Суть: ${entry.summary}`,
+    `Сферы: ${entry.domains.map((domain) => journalDomainLabels[domain]).join(", ")}`
+  ];
+
+  if (thoughts.length) {
+    lines.push("", "Ключевые мысли:", ...thoughts.map((thought) => `• ${thought}`));
+  }
+  if (decisions.length) {
+    lines.push("", "Решение:", ...decisions.map((decision) => `• ${decision}`));
+  }
+  lines.push("", "Сохранить?");
+  return lines.join("\n");
+}
+
 function parseCallbackData(value: string | undefined) {
-  const match = /^(save|cancel|work_save|work_convert|work_cancel):([a-zA-Z0-9_-]{1,48})$/.exec(
+  const match = /^(save|cancel|work_save|work_convert|work_cancel|journal_save|journal_cancel):([a-zA-Z0-9_-]{1,48})$/.exec(
     value || ""
   );
 
@@ -116,7 +156,9 @@ function parseCallbackData(value: string | undefined) {
       | "cancel"
       | "work_save"
       | "work_convert"
-      | "work_cancel",
+      | "work_cancel"
+      | "journal_save"
+      | "journal_cancel",
     pendingId: match[2]
   };
 }
@@ -136,6 +178,28 @@ async function handleCallback(
 
   if (!parsed) {
     await dependencies.answerCallback(callback.id, "Команда устарела");
+    return;
+  }
+
+  if (parsed.command === "journal_cancel") {
+    const canceled = await dependencies.cancelPendingJournal(chatId, parsed.pendingId);
+    await dependencies.answerCallback(callback.id, canceled ? "Отменено" : "Черновик недоступен");
+    await dependencies.sendMessage(
+      chatId,
+      canceled ? "Не сохраняю." : "Черновик уже недоступен или истёк."
+    );
+    return;
+  }
+
+  if (parsed.command === "journal_save") {
+    const saved = await dependencies.savePendingJournal(chatId, parsed.pendingId);
+    await dependencies.answerCallback(callback.id, saved ? "Сохранено" : "Черновик недоступен");
+    if (!saved) {
+      await dependencies.sendMessage(chatId, "Черновик уже недоступен или истёк.");
+      return;
+    }
+    await dependencies.sendMessage(chatId, "Дневниковая запись сохранена.");
+    if (saved.feedback) await dependencies.sendMessage(chatId, saved.feedback);
     return;
   }
 
@@ -212,15 +276,19 @@ async function parseAndConfirm(
   dependencies: TelegramWebhookDependencies
 ) {
   try {
-    const kind = await dependencies.classifyInput(text);
+    const kind = await dependencies.classifyInput(text, source);
 
     if (kind === "ACTION") {
-      const action = await dependencies.parseAction(text);
+      const parsedAction = await dependencies.parseAction(text);
 
-      if (!action) {
+      if (!parsedAction) {
         await dependencies.sendMessage(chatId, unclearMessage);
         return;
       }
+
+      const action = source === "TELEGRAM_VOICE"
+        ? { ...parsedAction, note: "Добавлено из голосового сообщения" }
+        : parsedAction;
 
       const pendingId = await dependencies.createPending(chatId, action);
       await dependencies.sendMessage(chatId, confirmationText(action), {
@@ -234,20 +302,36 @@ async function parseAndConfirm(
       return;
     }
 
-    const record = await dependencies.parseWorkRecord(text, source);
+    if (kind === "WORK_RECORD") {
+      const record = await dependencies.parseWorkRecord(text, source);
 
-    if (!record) {
-      await dependencies.sendMessage(chatId, unclearMessage);
+      if (!record) {
+        await dependencies.sendMessage(chatId, unclearMessage);
+        return;
+      }
+
+      const pendingId = await dependencies.createPendingWorkRecord(chatId, record);
+      await dependencies.sendMessage(chatId, workRecordConfirmationText(record), {
+        inline_keyboard: [
+          [{ text: "Сохранить запись", callback_data: `work_save:${pendingId}` }],
+          [{ text: "Превратить в действие", callback_data: `work_convert:${pendingId}` }],
+          [{ text: "Отмена", callback_data: `work_cancel:${pendingId}` }]
+        ]
+      });
       return;
     }
 
-    const pendingId = await dependencies.createPendingWorkRecord(chatId, record);
-    await dependencies.sendMessage(chatId, workRecordConfirmationText(record), {
-      inline_keyboard: [
-        [{ text: "Сохранить запись", callback_data: `work_save:${pendingId}` }],
-        [{ text: "Превратить в действие", callback_data: `work_convert:${pendingId}` }],
-        [{ text: "Отмена", callback_data: `work_cancel:${pendingId}` }]
-      ]
+    const entry = await dependencies.parseJournal(text, source);
+    if (!entry) {
+      await dependencies.sendMessage(chatId, unclearMessage);
+      return;
+    }
+    const pendingId = await dependencies.createPendingJournal(chatId, entry);
+    await dependencies.sendMessage(chatId, journalConfirmationText(entry), {
+      inline_keyboard: [[
+        { text: "Сохранить", callback_data: `journal_save:${pendingId}` },
+        { text: "Отмена", callback_data: `journal_cancel:${pendingId}` }
+      ]]
     });
   } catch (error) {
     console.error("Telegram message parse error", error);
@@ -284,7 +368,7 @@ export async function processTelegramUpdate(
   if (text && /^\/start(?:@\w+)?(?:\s|$)/i.test(text)) {
     await dependencies.sendMessage(
       chatId,
-      "Я записываю действия и рабочие заметки в твой трекер. Пришли текст или голосовое — перед сохранением я покажу, как понял сообщение."
+      "Я записываю действия, рабочие заметки и свободные дневниковые записи. Пришли текст или голосовое — перед сохранением я покажу, как понял сообщение."
     );
     return "handled";
   }
@@ -300,14 +384,16 @@ export async function processTelegramUpdate(
     return "ignored";
   }
 
-  if (
-    (voice.duration !== undefined && voice.duration > 90) ||
-    (voice.file_size !== undefined && voice.file_size > 10 * 1024 * 1024)
-  ) {
+  if (voice.duration !== undefined && voice.duration > 300) {
     await dependencies.sendMessage(
       chatId,
-      "Голосовое должно быть не длиннее 90 секунд. Попробуй короче или отправь текстом."
+      "Голосовое длиннее 5 минут. Разбей мысль на несколько сообщений — я обработаю их по отдельности, а в общем анализе они будут рассматриваться вместе."
     );
+    return "handled";
+  }
+
+  if (voice.file_size !== undefined && voice.file_size > 20 * 1024 * 1024) {
+    await dependencies.sendMessage(chatId, "Файл голосового слишком большой. Разбей его на несколько сообщений.");
     return "handled";
   }
 
