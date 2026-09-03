@@ -65,6 +65,12 @@ export type TelegramWebhookDependencies = {
     chatId: string,
     proposal: TelegramLifeContextProposal
   ): Promise<string>;
+  convertPendingJournalToLifeContext(
+    chatId: string,
+    pendingId: string
+  ): Promise<{ pendingId: string; proposal: TelegramLifeContextProposal } | null>;
+  startLifeContextMode(chatId: string): Promise<void>;
+  consumeLifeContextMode(chatId: string): Promise<boolean>;
   cancelPending(chatId: string, pendingId: string): Promise<boolean>;
   cancelPendingWorkRecord(chatId: string, pendingId: string): Promise<boolean>;
   cancelPendingJournal(chatId: string, pendingId: string): Promise<boolean>;
@@ -145,22 +151,64 @@ export function journalConfirmationText(entry: TelegramJournal) {
   const lines = [
     "Дневниковая запись",
     "",
-    `Суть: ${entry.summary}`,
+    "Суть:",
+    personalPreviewText(entry.summary),
+    "",
     `Сферы: ${entry.domains.map((domain) => journalDomainLabels[domain]).join(", ")}`
   ];
 
   if (thoughts.length) {
-    lines.push("", "Ключевые мысли:", ...thoughts.map((thought) => `• ${thought}`));
+    lines.push(
+      "",
+      "Что важно:",
+      ...thoughts.map((thought) => `• ${compactPreviewText(personalPreviewText(thought), 260)}`)
+    );
   }
   if (decisions.length) {
-    lines.push("", "Решение:", ...decisions.map((decision) => `• ${decision}`));
+    lines.push(
+      "",
+      "Решения:",
+      ...decisions.map((decision) => `• ${compactPreviewText(personalPreviewText(decision), 260)}`)
+    );
   }
-  lines.push("", "Сохранить?");
-  return lines.join("\n");
+  if (entry.nextStep) {
+    lines.push(
+      "",
+      "Ближайший шаг / событие:",
+      compactPreviewText(personalPreviewText(entry.nextStep), 420)
+    );
+  }
+  lines.push("", "Выбери действие:");
+  return lines.join("\n").slice(0, 3900);
 }
 
+function compactPreviewText(value: string, maxLength: number) {
+  const text = value.trim().replace(/\s+/g, " ");
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1).trimEnd()}…` : text;
+}
+
+function personalPreviewText(value: string) {
+  const withoutThirdPerson = value
+    .replace(
+      /(^|[^А-ЯЁа-яё])(?:автор|пользователь|субъект)(?=$|[^А-ЯЁа-яё])[\s,:—-]*/gi,
+      "$1"
+    )
+    .trim();
+  if (/(^|[^А-ЯЁа-яё])ты(?=$|[^А-ЯЁа-яё])/i.test(withoutThirdPerson)) {
+    return withoutThirdPerson;
+  }
+  return `Ты: ${withoutThirdPerson}`;
+}
+
+const lifeContextModePrompt =
+  "Наговори, что сейчас происходит в твоей жизни. Можно свободно рассказать про работу, деньги, свои проекты, отношения, состояние, планы, ограничения и важные решения.";
+
 function parseCallbackData(value: string | undefined) {
-  const match = /^(save|cancel|work_save|work_convert|work_cancel|journal_save|journal_cancel|context_apply|context_cancel):([a-zA-Z0-9_-]{1,48})$/.exec(
+  if (value === "context_mode") {
+    return { command: "context_mode" as const, pendingId: "" };
+  }
+
+  const match = /^(save|cancel|work_save|work_convert|work_cancel|journal_save|journal_context|journal_cancel|context_apply|context_cancel):([a-zA-Z0-9_-]{1,48})$/.exec(
     value || ""
   );
 
@@ -176,6 +224,7 @@ function parseCallbackData(value: string | undefined) {
       | "work_convert"
       | "work_cancel"
       | "journal_save"
+      | "journal_context"
       | "journal_cancel"
       | "context_apply"
       | "context_cancel",
@@ -198,6 +247,13 @@ async function handleCallback(
 
   if (!parsed) {
     await dependencies.answerCallback(callback.id, "Команда устарела");
+    return;
+  }
+
+  if (parsed.command === "context_mode") {
+    await dependencies.startLifeContextMode(chatId);
+    await dependencies.answerCallback(callback.id, "Режим включён на 30 минут");
+    await dependencies.sendMessage(chatId, lifeContextModePrompt);
     return;
   }
 
@@ -254,6 +310,37 @@ async function handleCallback(
     }
     await dependencies.sendMessage(chatId, "Дневниковая запись сохранена.");
     if (saved.feedback) await dependencies.sendMessage(chatId, saved.feedback);
+    return;
+  }
+
+  if (parsed.command === "journal_context") {
+    try {
+      const converted = await dependencies.convertPendingJournalToLifeContext(
+        chatId,
+        parsed.pendingId
+      );
+      if (!converted) {
+        await dependencies.answerCallback(callback.id, "Черновик недоступен");
+        await dependencies.sendMessage(chatId, "Черновик уже недоступен или истёк.");
+        return;
+      }
+      await dependencies.answerCallback(callback.id, "Preview контекста готов");
+      await dependencies.sendMessage(chatId, converted.proposal.preview, {
+        inline_keyboard: [[
+          { text: "✅ Применить", callback_data: `context_apply:${converted.pendingId}` },
+          { text: "❌ Отмена", callback_data: `context_cancel:${converted.pendingId}` }
+        ]]
+      });
+    } catch (error) {
+      console.error("Telegram Journal to LifeContext conversion failed", {
+        message: error instanceof Error ? error.message : "unknown"
+      });
+      await dependencies.answerCallback(callback.id, "Не удалось подготовить изменения");
+      await dependencies.sendMessage(
+        chatId,
+        "Не смог подготовить изменения текущего контекста. Дневниковая запись не сохранена, контекст не изменён."
+      );
+    }
     return;
   }
 
@@ -327,10 +414,11 @@ async function parseAndConfirm(
   chatId: string,
   text: string,
   source: Extract<TelegramWorkRecordSource, "TELEGRAM_TEXT" | "TELEGRAM_VOICE">,
-  dependencies: TelegramWebhookDependencies
+  dependencies: TelegramWebhookDependencies,
+  forcedKind?: TelegramInputKind
 ) {
   try {
-    const kind = await dependencies.classifyInput(text, source);
+    const kind = forcedKind ?? await dependencies.classifyInput(text, source);
 
     if (kind === "ACTION") {
       const parsedAction = await dependencies.parseAction(text);
@@ -400,10 +488,11 @@ async function parseAndConfirm(
     }
     const pendingId = await dependencies.createPendingJournal(chatId, entry);
     await dependencies.sendMessage(chatId, journalConfirmationText(entry), {
-      inline_keyboard: [[
-        { text: "Сохранить", callback_data: `journal_save:${pendingId}` },
-        { text: "Отмена", callback_data: `journal_cancel:${pendingId}` }
-      ]]
+      inline_keyboard: [
+        [{ text: "Сохранить в дневник", callback_data: `journal_save:${pendingId}` }],
+        [{ text: "В текущий контекст", callback_data: `journal_context:${pendingId}` }],
+        [{ text: "Отмена", callback_data: `journal_cancel:${pendingId}` }]
+      ]
     });
   } catch (error) {
     console.error("Telegram message parse error", error);
@@ -449,13 +538,31 @@ export async function processTelegramUpdate(
   if (text && /^\/start(?:@\w+)?(?:\s|$)/i.test(text)) {
     await dependencies.sendMessage(
       chatId,
-      "Я записываю действия, рабочие заметки, дневниковые записи и явные изменения текущего контекста. Пришли текст или голосовое — перед сохранением я покажу, как понял сообщение."
+      "Я записываю действия, рабочие заметки, дневниковые записи и явные изменения текущего контекста. Пришли текст или голосовое — перед сохранением я покажу, как понял сообщение. Для разового обновления контекста используй /context.",
+      {
+        inline_keyboard: [[
+          { text: "🧭 Текущий контекст", callback_data: "context_mode" }
+        ]]
+      }
     );
     return "handled";
   }
 
+  if (text && (/^\/context(?:@\w+)?(?:\s|$)/i.test(text) || /^🧭\s*текущий контекст$/i.test(text))) {
+    await dependencies.startLifeContextMode(chatId);
+    await dependencies.sendMessage(chatId, lifeContextModePrompt);
+    return "handled";
+  }
+
   if (text) {
-    await parseAndConfirm(chatId, text, "TELEGRAM_TEXT", dependencies);
+    const forceLifeContext = await dependencies.consumeLifeContextMode(chatId);
+    await parseAndConfirm(
+      chatId,
+      text,
+      "TELEGRAM_TEXT",
+      dependencies,
+      forceLifeContext ? "LIFE_CONTEXT" : undefined
+    );
     return "handled";
   }
 
@@ -488,6 +595,13 @@ export async function processTelegramUpdate(
     return "handled";
   }
 
-  await parseAndConfirm(chatId, transcript, "TELEGRAM_VOICE", dependencies);
+  const forceLifeContext = await dependencies.consumeLifeContextMode(chatId);
+  await parseAndConfirm(
+    chatId,
+    transcript,
+    "TELEGRAM_VOICE",
+    dependencies,
+    forceLifeContext ? "LIFE_CONTEXT" : undefined
+  );
   return "handled";
 }

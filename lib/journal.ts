@@ -44,7 +44,7 @@ export const telegramJournalSchema = z.object({
   entryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   source: z.enum(journalSources),
   cleanedText: z.string().trim().min(1).max(15000),
-  summary: z.string().trim().min(1).max(600),
+  summary: z.string().trim().min(1).max(1800),
   domains: z.array(z.enum(journalDomains)).min(1).max(journalDomains.length),
   keyEvents: evidenceListSchema,
   tensions: evidenceListSchema,
@@ -93,6 +93,7 @@ type JournalFailureReason =
   | "MALFORMED_RESPONSE"
   | "MALFORMED_JSON"
   | "SCHEMA_VALIDATION"
+  | "CONTENT_QUALITY"
   | "REFUSAL";
 
 class JournalAttemptError extends Error {
@@ -120,6 +121,7 @@ type JournalDiagnostic = {
   responseLength?: number;
   contentLength?: number;
   validationPaths?: Array<{ path: string; code: string }>;
+  qualityIssues?: string[];
   apiErrorType?: string | null;
   apiErrorCode?: string | null;
   apiErrorParam?: string | null;
@@ -182,7 +184,8 @@ async function structuredCompletion(
 async function journalStructuredAttempt(
   schema: Record<string, unknown>,
   messages: Array<{ role: "system" | "user"; content: string }>,
-  attempt: number
+  attempt: number,
+  validateQuality: (entry: Omit<TelegramJournal, "source">) => string[]
 ) {
   let response: Response;
 
@@ -310,6 +313,19 @@ async function journalStructuredAttempt(
     throw new JournalAttemptError("SCHEMA_VALIDATION", true, content);
   }
 
+  const qualityIssues = validateQuality(parsed.data);
+  if (qualityIssues.length > 0) {
+    logJournalFailure("CONTENT_QUALITY", {
+      attempt,
+      status: response.status,
+      finishReason,
+      responseLength: rawResponse.length,
+      contentLength,
+      qualityIssues
+    });
+    throw new JournalAttemptError("CONTENT_QUALITY", true);
+  }
+
   return parsed.data;
 }
 
@@ -328,12 +344,18 @@ function journalRepairMessages(content: string) {
 }
 
 function journalRetryMessages(
-  messages: Array<{ role: "system" | "user"; content: string }>
+  messages: Array<{ role: "system" | "user"; content: string }>,
+  reason: JournalFailureReason
 ) {
   return messages.map((message, index) => index === 0
     ? {
         ...message,
-        content: `${message.content}\nЭто повторная попытка: обязательно заверши весь JSON в пределах доступного output budget.`
+        content: [
+          message.content,
+          reason === "CONTENT_QUALITY"
+            ? "Это повторная попытка: cleanedText должен остаться подробным текстом от первого лица, а summary — плотным preview через «ты» без слов «автор», «пользователь» и «субъект»."
+            : "Это повторная попытка: обязательно заверши весь JSON в пределах доступного output budget."
+        ].join("\n")
       }
     : message
   );
@@ -341,13 +363,19 @@ function journalRetryMessages(
 
 async function parseStructuredJournalWithRetry(
   schema: Record<string, unknown>,
-  messages: Array<{ role: "system" | "user"; content: string }>
+  messages: Array<{ role: "system" | "user"; content: string }>,
+  validateQuality: (entry: Omit<TelegramJournal, "source">) => string[]
 ) {
   let attemptMessages = messages;
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
-      return await journalStructuredAttempt(schema, attemptMessages, attempt);
+      return await journalStructuredAttempt(
+        schema,
+        attemptMessages,
+        attempt,
+        validateQuality
+      );
     } catch (error) {
       if (!(error instanceof JournalAttemptError)) throw error;
       if (attempt === 2 || !error.retryable) {
@@ -355,7 +383,7 @@ async function parseStructuredJournalWithRetry(
       }
       attemptMessages = error.repairContent && error.reason !== "TRUNCATED"
         ? journalRepairMessages(error.repairContent)
-        : journalRetryMessages(messages);
+        : journalRetryMessages(messages, error.reason);
     }
   }
 
@@ -428,6 +456,34 @@ function nullableText(value: string | null) {
   return value?.trim() || null;
 }
 
+function hasRussianWord(text: string, word: string) {
+  return new RegExp(
+    `(^|[^А-ЯЁа-яё])${word}(?=$|[^А-ЯЁа-яё])`,
+    "i"
+  ).test(text);
+}
+
+function journalQualityIssues(
+  entry: Omit<TelegramJournal, "source">,
+  originalText: string,
+  isLongEntry: boolean
+) {
+  const issues: string[] = [];
+  if (["автор", "пользователь", "субъект"].some((word) => hasRussianWord(entry.summary, word))) {
+    issues.push("preview_third_person");
+  }
+  if (!hasRussianWord(entry.summary, "ты")) {
+    issues.push("preview_missing_second_person");
+  }
+  if (hasRussianWord(originalText, "я") && !hasRussianWord(entry.cleanedText, "я")) {
+    issues.push("cleaned_text_missing_first_person");
+  }
+  if (isLongEntry && entry.cleanedText.split(/\s+/).filter(Boolean).length < 180) {
+    issues.push("cleaned_text_too_short_for_long_entry");
+  }
+  return issues;
+}
+
 export async function parseTelegramJournal(
   originalText: string,
   source: Extract<TelegramJournalSource, "TELEGRAM_TEXT" | "TELEGRAM_VOICE">,
@@ -435,6 +491,7 @@ export async function parseTelegramJournal(
 ): Promise<TelegramJournal | null> {
   const text = originalText.trim();
   if (!text) return null;
+  const isLongEntry = text.split(/\s+/).length >= 220;
 
   const parsed = await parseStructuredJournalWithRetry(
     {
@@ -443,7 +500,7 @@ export async function parseTelegramJournal(
       properties: {
         entryDate: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
         cleanedText: { type: "string", minLength: 1, maxLength: 15000 },
-        summary: { type: "string", minLength: 1, maxLength: 600 },
+        summary: { type: "string", minLength: 1, maxLength: 1800 },
         domains: {
           type: "array",
           minItems: 1,
@@ -469,18 +526,28 @@ export async function parseTelegramJournal(
           "Создай структурированную дневниковую запись на русском без выдуманных фактов.",
           `Сегодня: ${todayInAmsterdam(now)}.`,
           "cleanedText — бережно отредактированная речь автора ОТ ПЕРВОГО ЛИЦА, а не summary.",
-          "Сохрани эмоциональность, сомнения, разговорные и характерные формулировки. Обычно сохраняй 60–85% смыслового содержания.",
+          "В cleanedText используй «я» и сохрани ход мысли, аргументацию, сомнения, мотивацию, объяснение решений, причинные связи, эмоциональный оттенок и значимые детали.",
+          "Для длинной содержательной расшифровки cleanedText должен оставаться подробным текстом, а не выжимкой из двух-трёх предложений.",
           "Удали только слова-паразиты, оговорки, случайные повторы и очевидный речевой шум.",
           "Запрещено переписывать от третьего лица, делать корпоративную выжимку, превращать сомнение в уверенность, диагностировать или выдумывать мотивы.",
-          "summary — короткая фактическая суть. domains — все действительно затронутые сферы.",
-          "keyEvents — только произошедшее; tensions — только названные автором противоречия; decisions — только явно принятые решения; questions — только реальные открытые вопросы.",
-          "Каждый структурный элемент пометь FACT, USER_INTERPRETATION или AI_INTERPRETATION. AI_INTERPRETATION используй редко и формулируй как гипотезу.",
-          "nextStep добавляй только если он действительно следует из речи. По умолчанию importance=NORMAL.",
+          "summary — компактный Telegram preview во ВТОРОМ ЛИЦЕ с обращением «ты». Никогда не используй слова «автор», «пользователь» или «субъект».",
+          isLongEntry
+            ? "Для этой длинной записи summary должен содержать 120–250 слов: 2–4 плотных абзаца без искусственного заполнения объёма."
+            : "Для этой короткой записи summary должен быть заметно короче и не повторять cleanedText целиком.",
+          "В summary приоритетны: что происходит; почему это важно именно тебе; причинные связи, которые ты сам назвал; реальные решения; планы и намерения; конкретный ближайший шаг или событие.",
+          "Сохраняй пользовательскую мотивацию и self-observed causal links буквально по смыслу. Не заменяй их внешней AI-интерпретацией.",
+          "domains — все действительно затронутые сферы.",
+          "keyEvents — произошедшие факты и явно назначенные будущие события; tensions — только названные тобой противоречия; decisions — только явно принятые решения; questions — только реальные открытые вопросы.",
+          "Желание или намерение называй «хочу», «планирую» или «намерен», но не записывай в decisions. Размышление не является решением. Назначенная встреча или поездка — событие/следующий шаг, а не решение.",
+          "Каждый структурный элемент пометь FACT, USER_INTERPRETATION или AI_INTERPRETATION. Самостоятельно названная причинная связь — USER_INTERPRETATION. AI_INTERPRETATION используй только при явной необходимости и формулируй как гипотезу.",
+          "Тексты keyEvents, tensions, decisions и questions, которые могут попасть в preview, также формулируй через «ты», без третьего лица.",
+          "nextStep добавляй только для реально названного ближайшего шага или конкретного будущего события. По умолчанию importance=NORMAL.",
           "Не добавляй советы, мотивацию, терапевтические или медицинские выводы."
         ].join("\n")
       },
       { role: "user", content: text }
-    ]
+    ],
+    (entry) => journalQualityIssues(entry, text, isLongEntry)
   );
 
   return {
@@ -492,9 +559,22 @@ export async function parseTelegramJournal(
 }
 
 export function journalPreviewThoughts(entry: TelegramJournal) {
-  return [
-    ...(entry.keyEvents ?? []),
-    ...(entry.tensions ?? []),
-    ...(entry.questions ?? [])
-  ].map((item) => item.text).slice(0, 3);
+  const candidates = [
+    ...(entry.tensions ?? []).filter((item) => item.kind === "USER_INTERPRETATION"),
+    ...(entry.keyEvents ?? []).filter((item) => item.kind === "USER_INTERPRETATION"),
+    ...(entry.keyEvents ?? []).filter((item) => item.kind === "FACT"),
+    ...(entry.tensions ?? []).filter((item) => item.kind === "FACT"),
+    ...(entry.questions ?? []).filter((item) => item.kind !== "AI_INTERPRETATION")
+  ];
+  const seen = new Set<string>();
+
+  return candidates
+    .map((item) => item.text.trim())
+    .filter((item) => {
+      const key = item.toLocaleLowerCase("ru-RU");
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 3);
 }

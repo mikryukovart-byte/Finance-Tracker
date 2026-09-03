@@ -36,6 +36,30 @@ import type { TelegramRuntimeConfig } from "@/lib/telegram-auth";
 import type { TelegramWebhookDependencies } from "@/lib/telegram-webhook-core";
 
 const pendingLifetimeMs = 30 * 60 * 1000;
+export const lifeContextModeLifetimeMs = 30 * 60 * 1000;
+const lifeContextModeKind = "LIFE_CONTEXT_CAPTURE_MODE";
+
+type LifeContextModePayload = { kind: typeof lifeContextModeKind };
+
+export function isLifeContextModePayload(value: unknown): value is LifeContextModePayload {
+  return Boolean(
+    value
+    && typeof value === "object"
+    && "kind" in value
+    && value.kind === lifeContextModeKind
+  );
+}
+
+export function lifeContextModeExpiresAt(now = new Date()) {
+  return new Date(now.getTime() + lifeContextModeLifetimeMs);
+}
+
+export function journalToLifeContextInput(entry: TelegramJournal) {
+  return {
+    text: entry.cleanedText,
+    source: entry.source === "WEB_MANUAL" ? "TELEGRAM_TEXT" as const : entry.source
+  };
+}
 
 async function removeExpiredPendingActions(now = new Date()) {
   await prisma.telegramPendingAction.deleteMany({
@@ -120,6 +144,66 @@ async function createPendingLifeContext(
     select: { id: true }
   });
   return pending.id;
+}
+
+async function startLifeContextMode(
+  chatId: string,
+  trackerUserId: string
+) {
+  const now = new Date();
+  await prisma.$transaction(async (transaction) => {
+    const existing = await transaction.telegramPendingLifeContext.findMany({
+      where: { chatId, userId: trackerUserId },
+      select: { id: true, payload: true }
+    });
+    const modeIds = existing
+      .filter((item) => isLifeContextModePayload(item.payload))
+      .map((item) => item.id);
+
+    if (modeIds.length > 0) {
+      await transaction.telegramPendingLifeContext.deleteMany({
+        where: { id: { in: modeIds }, chatId, userId: trackerUserId }
+      });
+    }
+    await transaction.telegramPendingLifeContext.create({
+      data: {
+        chatId,
+        userId: trackerUserId,
+        payload: { kind: lifeContextModeKind },
+        expiresAt: lifeContextModeExpiresAt(now)
+      }
+    });
+  });
+}
+
+async function consumeLifeContextMode(
+  chatId: string,
+  trackerUserId: string
+) {
+  return prisma.$transaction(async (transaction) => {
+    const now = new Date();
+    const candidates = await transaction.telegramPendingLifeContext.findMany({
+      where: {
+        chatId,
+        userId: trackerUserId,
+        expiresAt: { gt: now }
+      },
+      select: { id: true, payload: true },
+      orderBy: { createdAt: "desc" }
+    });
+    const mode = candidates.find((item) => isLifeContextModePayload(item.payload));
+    if (!mode) return false;
+
+    const claimed = await transaction.telegramPendingLifeContext.deleteMany({
+      where: {
+        id: mode.id,
+        chatId,
+        userId: trackerUserId,
+        expiresAt: { gt: now }
+      }
+    });
+    return claimed.count === 1;
+  });
 }
 
 async function cancelPending(chatId: string, pendingId: string) {
@@ -422,6 +506,51 @@ async function savePendingLifeContext(
   });
 }
 
+async function convertPendingJournalToLifeContext(
+  chatId: string,
+  pendingId: string,
+  trackerUserId: string
+) {
+  const now = new Date();
+  const [pending, currentRow] = await Promise.all([
+    prisma.telegramPendingJournal.findFirst({
+      where: { id: pendingId, chatId, expiresAt: { gt: now } },
+      select: { payload: true }
+    }),
+    prisma.lifeContext.findUnique({ where: { userId: trackerUserId } })
+  ]);
+  const journal = telegramJournalSchema.safeParse(pending?.payload);
+  if (!journal.success) return null;
+  const input = journalToLifeContextInput(journal.data);
+
+  const proposal = await parseTelegramLifeContextProposal(
+    input.text,
+    input.source,
+    normalizeLifeContext(currentRow),
+    now,
+    "JOURNAL_CONVERSION"
+  );
+  if (!proposal) return null;
+
+  return prisma.$transaction(async (transaction) => {
+    const claimed = await transaction.telegramPendingJournal.deleteMany({
+      where: { id: pendingId, chatId, expiresAt: { gt: new Date() } }
+    });
+    if (claimed.count !== 1) return null;
+
+    const contextPending = await transaction.telegramPendingLifeContext.create({
+      data: {
+        chatId,
+        userId: trackerUserId,
+        payload: proposal as Prisma.InputJsonObject,
+        expiresAt: new Date(Date.now() + pendingLifetimeMs)
+      },
+      select: { id: true }
+    });
+    return { pendingId: contextPending.id, proposal };
+  });
+}
+
 function fallbackActionFromRecord(record: TelegramWorkRecord): TelegramDailyAction {
   const actionText = record.nextStep || `${record.title}. ${record.summary}`;
   return {
@@ -494,6 +623,16 @@ export function createTelegramDependencies(
     createPendingJournal,
     createPendingLifeContext: (chatId, proposal) =>
       createPendingLifeContext(chatId, config.trackerUserId, proposal),
+    convertPendingJournalToLifeContext: (chatId, pendingId) =>
+      convertPendingJournalToLifeContext(
+        chatId,
+        pendingId,
+        config.trackerUserId
+      ),
+    startLifeContextMode: (chatId) =>
+      startLifeContextMode(chatId, config.trackerUserId),
+    consumeLifeContextMode: (chatId) =>
+      consumeLifeContextMode(chatId, config.trackerUserId),
     cancelPending,
     cancelPendingWorkRecord,
     cancelPendingJournal,

@@ -374,7 +374,8 @@ async function extractLifeContextPatch(
   text: string,
   source: Extract<TelegramJournalSource, "TELEGRAM_TEXT" | "TELEGRAM_VOICE">,
   current: LifeContextValue,
-  now: Date
+  now: Date,
+  intent: "EXPLICIT_COMMAND" | "JOURNAL_CONVERSION"
 ) {
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -432,7 +433,9 @@ async function extractLifeContextPatch(
             "Сохраняй первое лицо, фактический смысл и характерные формулировки пользователя. Можно убрать речевой шум.",
             "Не пиши от третьего лица, не делай HR-документ, не ставь диагнозы и не превращай сомнение в решение.",
             "Если контекст пустой и пользователь явно просит заполнить его целиком, разложи сказанное по всем действительно затронутым полям.",
-            "Если контекст уже есть, меняй только то, что пользователь явно попросил изменить."
+            intent === "JOURNAL_CONVERSION"
+              ? "Пользователь отдельно подтвердил намерение перенести эту дневниковую запись в текущий контекст. Извлеки только устойчивые факты, названные приоритеты, ограничения, активные проекты и явно принятые решения. Сохраняй пользовательскую мотивацию и названные им причинные связи, но не переноси мимолётное настроение и не превращай желание или план в activeDecision."
+              : "Если контекст уже есть, меняй только то, что пользователь явно попросил изменить."
           ].join("\n")
         },
         {
@@ -441,7 +444,9 @@ async function extractLifeContextPatch(
             "Текущий контекст:",
             JSON.stringify({ ...current, updatedAt: undefined }),
             "",
-            "Команда пользователя:",
+            intent === "JOURNAL_CONVERSION"
+              ? "Подтверждённая пользователем дневниковая запись для переноса:"
+              : "Команда пользователя:",
             text
           ].join("\n")
         }
@@ -461,11 +466,12 @@ export async function parseTelegramLifeContextProposal(
   originalText: string,
   source: Extract<TelegramJournalSource, "TELEGRAM_TEXT" | "TELEGRAM_VOICE">,
   current: LifeContextValue = emptyLifeContext,
-  now = new Date()
+  now = new Date(),
+  intent: "EXPLICIT_COMMAND" | "JOURNAL_CONVERSION" = "EXPLICIT_COMMAND"
 ): Promise<TelegramLifeContextProposal | null> {
   const text = originalText.trim();
   if (!text) return null;
-  const patch = await extractLifeContextPatch(text, source, current, now);
+  const patch = await extractLifeContextPatch(text, source, current, now, intent);
   return telegramLifeContextProposalSchema.parse({
     patch,
     baseUpdatedAt: current.updatedAt,

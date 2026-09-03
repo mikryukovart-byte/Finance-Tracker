@@ -6,6 +6,7 @@ import {
   type TelegramDailyAction
 } from "@/lib/telegram-daily-actions";
 import {
+  journalConfirmationText,
   processTelegramUpdate,
   type TelegramWebhookDependencies
 } from "@/lib/telegram-webhook-core";
@@ -29,6 +30,11 @@ import {
 } from "@/lib/telegram-life-context";
 import { emptyLifeContext, type LifeContextValue } from "@/lib/life-context";
 import { dailyFeedbackModel } from "@/lib/daily-feedback";
+import {
+  journalToLifeContextInput,
+  lifeContextModeExpiresAt,
+  lifeContextModeLifetimeMs
+} from "@/lib/telegram-service";
 import { splitTelegramMessage, weeklyDeliveryWindow } from "@/lib/weekly-delivery";
 import { weeklyReportIdempotencyKey, weeklyReportModel } from "@/lib/weekly-report";
 
@@ -56,7 +62,7 @@ const journalEntry: TelegramJournal = {
   entryDate: "2026-07-01",
   source: "TELEGRAM_VOICE",
   cleanedText: "Сегодня я много думал о работе и своих проектах. Пока не уверен, что нужно резко менять курс.",
-  summary: "Пользователь сопоставляет работу и собственные проекты, но пока не принял решение менять курс.",
+  summary: "Ты сопоставляешь работу и собственные проекты, но пока не принял решение менять курс.",
   domains: ["EMPLOYMENT", "OWN_PROJECTS", "INNER_STATE"],
   keyEvents: [{ text: "Сегодня размышлял о работе и своих проектах", kind: "FACT" }],
   tensions: [{ text: "Хочется двигать свои проекты, но резкая смена курса пока вызывает сомнение", kind: "USER_INTERPRETATION" }],
@@ -72,6 +78,38 @@ const longTranscriptParts = Array.from(
 );
 const longTranscript = longTranscriptParts.join(" ");
 const longCleanedText = longTranscriptParts.slice(0, 68).join(" ");
+
+const richJournalEntry: TelegramJournal = {
+  entryDate: "2026-09-03",
+  source: "TELEGRAM_VOICE",
+  cleanedText: [
+    "Я уже полгода живу в Москве и работаю исполнительным директором фотошколы. Мне нравится эта работа, потому что здесь я могу получить управленческий опыт перед запуском собственных проектов.",
+    "Я сознательно остаюсь в найме: сейчас это не отказ от собственного пути, а школа управления и способ быстрее закрыть долги. После появления стабильной работы и квартиры мне стало спокойнее, поэтому я снова начал уделять внимание отношениям.",
+    "Я хочу вернуть спорт и планирую начать ходить в зал в сентябре, но это пока намерение, а не жёсткое решение. По своему проекту я уже определил бизнес-модель, а 9 сентября встречаюсь с партнёром в Перми, чтобы обсудить следующий этап.",
+    "До конца сентября я решил не увольняться. Пока остаюсь в Москве, держу финансовый приоритет на быстром погашении долгов и проверяю, как совместить работу, отношения, спорт и развитие проекта без поспешных решений."
+  ].join("\n\n"),
+  summary: [
+    "Ты уже полгода живёшь в Москве и сознательно используешь работу исполнительным директором фотошколы как место, где можно получить управленческий опыт перед собственными проектами. Найм сейчас для тебя не отказ от своего пути, а практическая школа управления и источник стабильности, пока финансовый приоритет — как можно быстрее закрыть долги.",
+    "После появления стабильной работы и квартиры тебе стало спокойнее, и ты сам связываешь это с возвращением внимания к отношениям. Ты хочешь вернуть спорт и планируешь начать зал в сентябре, но пока называешь это намерением. По собственному проекту уже есть бизнес-модель и конкретный следующий шаг — встреча 9 сентября в Перми."
+  ].join("\n\n"),
+  domains: ["MONEY", "EMPLOYMENT", "OWN_PROJECTS", "BODY_HEALTH", "RELATIONSHIPS"],
+  keyEvents: [
+    { text: "Ты уже полгода живёшь в Москве и работаешь исполнительным директором фотошколы", kind: "FACT" },
+    { text: "Ты сам заметил: после появления стабильной работы и квартиры стало спокойнее, поэтому вернулось внимание к отношениям", kind: "USER_INTERPRETATION" },
+    { text: "9 сентября ты встречаешься с партнёром в Перми по собственному проекту", kind: "FACT" }
+  ],
+  tensions: [{
+    text: "Ты совмещаешь стабильность найма с намерением развивать собственный проект",
+    kind: "USER_INTERPRETATION"
+  }],
+  decisions: [{
+    text: "Ты решил не увольняться до конца сентября",
+    kind: "FACT"
+  }],
+  questions: null,
+  nextStep: "9 сентября встретиться с партнёром в Перми и обсудить следующий этап проекта",
+  importance: "IMPORTANT"
+};
 
 function journalOutput(overrides: Partial<Omit<TelegramJournal, "source">> = {}) {
   const { source: _source, ...base } = journalEntry;
@@ -137,6 +175,12 @@ function createDependencies(
     createPendingWorkRecord: async () => "work-pending-id",
     createPendingJournal: async () => "journal-pending-id",
     createPendingLifeContext: async () => "context-pending-id",
+    convertPendingJournalToLifeContext: async () => ({
+      pendingId: "context-pending-id",
+      proposal: lifeContextProposal()
+    }),
+    startLifeContextMode: async () => {},
+    consumeLifeContextMode: async () => false,
     cancelPending: async () => true,
     cancelPendingWorkRecord: async () => true,
     cancelPendingJournal: async () => true,
@@ -330,6 +374,42 @@ test.describe("Telegram webhook core", () => {
     expect(proposal?.preview).not.toContain("{");
   });
 
+  test("uses Journal-conversion instructions without turning intentions into decisions", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    let requestBody: Record<string, any> | null = null;
+    const patch = normalizeTelegramLifeContextPatch({
+      currentSituation: {
+        operation: "APPEND",
+        value: "Я работаю в найме и использую его как школу управления.",
+        match: null
+      },
+      activeDecisions: { operation: "UNCHANGED", items: [] }
+    });
+    process.env.OPENAI_API_KEY = "test-key";
+    global.fetch = async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body));
+      return chatCompletionResponse(patch);
+    };
+    try {
+      const proposal = await parseTelegramLifeContextProposal(
+        richJournalEntry.cleanedText,
+        "TELEGRAM_VOICE",
+        existingLifeContext,
+        new Date("2026-09-03T12:00:00Z"),
+        "JOURNAL_CONVERSION"
+      );
+      const body = requestBody as Record<string, any> | null;
+      expect(body?.messages[0].content).toContain("отдельно подтвердил намерение перенести");
+      expect(body?.messages[0].content).toContain("не превращай желание или план в activeDecision");
+      expect(body?.messages[1].content).toContain("дневниковая запись для переноса");
+      expect(proposal?.patch.activeDecisions.operation).toBe("UNCHANGED");
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
   test("partial LifeContext update leaves every untouched field structurally unchanged", () => {
     const patch = normalizeTelegramLifeContextPatch({
       priorities: { operation: "REPLACE", items: ["Стабилизация финансов — главный приоритет"] }
@@ -478,17 +558,59 @@ test.describe("Telegram webhook core", () => {
         new Date("2026-09-03T12:00:00Z")
       );
       expect(parsed?.cleanedText.length).toBeGreaterThan(5000);
-      expect(parsed!.cleanedText.length / longTranscript.length).toBeGreaterThan(0.6);
+      expect(parsed!.cleanedText.split(/\s+/).length).toBeGreaterThan(500);
       const requestBody = requestBodies[0];
       expect(requestBody.max_completion_tokens).toBe(journalMaxCompletionTokens);
       expect(requestBody.response_format?.type).toBe("json_schema");
       expect(requestBody.response_format?.json_schema?.strict).toBeTruthy();
       expect(JSON.stringify(requestBody.response_format?.json_schema?.schema))
         .not.toContain("uniqueItems");
+      const systemPrompt = requestBody.messages[0].content;
+      expect(systemPrompt).toContain("120–250 слов");
+      expect(systemPrompt).toContain("причинные связи");
+      expect(systemPrompt).toContain("Желание или намерение");
+      expect(systemPrompt).toContain("Самостоятельно названная причинная связь — USER_INTERPRETATION");
     } finally {
       global.fetch = originalFetch;
       process.env.OPENAI_API_KEY = originalApiKey;
     }
+  });
+
+  test("keeps a long Journal preview dense, personal and free of third-person labels", () => {
+    const preview = journalConfirmationText(richJournalEntry);
+    const wordCount = preview.split(/\s+/).filter(Boolean).length;
+
+    expect(preview).toContain("Ты уже полгода живёшь в Москве");
+    expect(preview).toContain("управленческий опыт перед собственными проектами");
+    expect(preview).toContain("после появления стабильной работы и квартиры");
+    expect(preview).toContain("9 сентября");
+    expect(preview).not.toMatch(/\b(?:Автор|Пользователь|Субъект)\b/i);
+    expect(wordCount).toBeGreaterThanOrEqual(120);
+    expect(wordCount).toBeLessThanOrEqual(250);
+  });
+
+  test("removes forbidden third-person labels from Journal preview defensively", () => {
+    const preview = journalConfirmationText({
+      ...journalEntry,
+      summary: "Автор работает в найме и развивает собственный проект.",
+      keyEvents: [{ text: "Пользователь назначил встречу на 9 сентября", kind: "FACT" }],
+      tensions: [{ text: "Субъект связывает стабильность с возвращением внимания к отношениям", kind: "USER_INTERPRETATION" }]
+    });
+
+    expect(preview).not.toMatch(/(?:Автор|Пользователь|Субъект)/i);
+    expect(preview).toContain("Ты:");
+  });
+
+  test("keeps first-person cleaned text and does not merge decisions, intentions and events", () => {
+    expect(richJournalEntry.cleanedText).toMatch(/(^|[^А-ЯЁа-яё])Я(?=$|[^А-ЯЁа-яё])/);
+    expect(richJournalEntry.cleanedText.length).toBeGreaterThan(800);
+    expect(richJournalEntry.cleanedText.split(/[.!?]+/).filter(Boolean).length).toBeGreaterThan(3);
+    expect(richJournalEntry.decisions?.map((item) => item.text).join(" "))
+      .toContain("не увольняться до конца сентября");
+    expect(richJournalEntry.decisions?.map((item) => item.text).join(" "))
+      .not.toContain("зал");
+    expect(richJournalEntry.summary).toContain("пока называешь это намерением");
+    expect(richJournalEntry.nextStep).toContain("9 сентября");
   });
 
   test("repairs a malformed structured Journal response once without resending the transcript", async () => {
@@ -559,6 +681,36 @@ test.describe("Telegram webhook core", () => {
     } finally {
       global.fetch = originalFetch;
       process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
+  test("retries a lossy long Journal result instead of accepting a short cleaned summary", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const originalConsoleError = console.error;
+    let attempt = 0;
+    const logs: unknown[][] = [];
+    process.env.OPENAI_API_KEY = "test-key";
+    console.error = (...args) => { logs.push(args); };
+    global.fetch = async () => {
+      attempt += 1;
+      return attempt === 1
+        ? chatCompletionResponse(journalOutput({
+            cleanedText: "Я работаю в найме и развиваю свой проект.",
+            summary: "Ты работаешь в найме и развиваешь свой проект."
+          }))
+        : chatCompletionResponse(journalOutput({ cleanedText: longCleanedText }));
+    };
+    try {
+      const parsed = await parseTelegramJournal(longTranscript, "TELEGRAM_VOICE");
+      expect(parsed?.cleanedText).toBe(longCleanedText);
+      expect(attempt).toBe(2);
+      expect(JSON.stringify(logs)).toContain("cleaned_text_too_short_for_long_entry");
+      expect(JSON.stringify(logs)).not.toContain(longTranscriptParts[0]);
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+      console.error = originalConsoleError;
     }
   });
 
@@ -852,6 +1004,166 @@ test.describe("Telegram webhook core", () => {
     expect(workSaveCount).toBe(0);
     expect(actionSaveCount).toBe(0);
     expect(messages).toContain("Не сохраняю.");
+  });
+
+  test("exposes the current-context entry point from /start", async () => {
+    const messages: Array<{ text: string; markup?: unknown }> = [];
+    await processTelegramUpdate(
+      { message: { chat: { id: "allowed-chat" }, text: "/start" } },
+      "allowed-chat",
+      createDependencies({
+        sendMessage: async (_chatId, text, markup) => {
+          messages.push({ text, markup });
+          return {};
+        }
+      })
+    );
+
+    expect(messages[0].text).toContain("/context");
+    expect(JSON.stringify(messages[0].markup)).toContain("🧭 Текущий контекст");
+    expect(JSON.stringify(messages[0].markup)).toContain("context_mode");
+  });
+
+  test("activates current-context mode from the inline button", async () => {
+    let activatedFor = "";
+    const messages: string[] = [];
+    await processTelegramUpdate(
+      { callback_query: { id: "mode", data: "context_mode", message: { chat: { id: "allowed-chat" } } } },
+      "allowed-chat",
+      createDependencies({
+        startLifeContextMode: async (chatId) => { activatedFor = chatId; },
+        sendMessage: async (_chatId, text) => {
+          messages.push(text);
+          return {};
+        }
+      })
+    );
+
+    expect(activatedFor).toBe("allowed-chat");
+    expect(messages[0]).toContain("Наговори, что сейчас происходит");
+  });
+
+  test("current-context mode is one-shot and bypasses the classifier once", async () => {
+    let modeActive = false;
+    let classifierCount = 0;
+    let contextCount = 0;
+    let journalCount = 0;
+    const dependencies = createDependencies({
+      startLifeContextMode: async () => { modeActive = true; },
+      consumeLifeContextMode: async () => {
+        if (!modeActive) return false;
+        modeActive = false;
+        return true;
+      },
+      classifyInput: async () => {
+        classifierCount += 1;
+        return "JOURNAL";
+      },
+      createPendingLifeContext: async () => {
+        contextCount += 1;
+        return "context-pending-id";
+      },
+      createPendingJournal: async () => {
+        journalCount += 1;
+        return "journal-pending-id";
+      }
+    });
+
+    await processTelegramUpdate(
+      { message: { chat: { id: "allowed-chat" }, text: "/context" } },
+      "allowed-chat",
+      dependencies
+    );
+    await processTelegramUpdate(
+      { message: { chat: { id: "allowed-chat" }, text: "Сейчас я остаюсь в найме и закрываю долги." } },
+      "allowed-chat",
+      dependencies
+    );
+    await processTelegramUpdate(
+      { message: { chat: { id: "allowed-chat" }, text: "Сегодня думаю о работе и отношениях." } },
+      "allowed-chat",
+      dependencies
+    );
+
+    expect(contextCount).toBe(1);
+    expect(journalCount).toBe(1);
+    expect(classifierCount).toBe(1);
+  });
+
+  test("current-context mode forces the next voice into LifeContext without retranscription", async () => {
+    let transcriptionCount = 0;
+    let classifierCount = 0;
+    let contextCount = 0;
+    await processTelegramUpdate(
+      { message: { chat: { id: "allowed-chat" }, voice: { file_id: "voice-context", duration: 90 } } },
+      "allowed-chat",
+      createDependencies({
+        consumeLifeContextMode: async () => true,
+        transcribeVoice: async () => {
+          transcriptionCount += 1;
+          return "Сейчас я работаю в найме и развиваю собственный проект.";
+        },
+        classifyInput: async () => {
+          classifierCount += 1;
+          return "JOURNAL";
+        },
+        createPendingLifeContext: async () => {
+          contextCount += 1;
+          return "context-pending-id";
+        }
+      })
+    );
+
+    expect(transcriptionCount).toBe(1);
+    expect(classifierCount).toBe(0);
+    expect(contextCount).toBe(1);
+  });
+
+  test("current-context mode is scoped to the allowed chat", async () => {
+    let consumeCount = 0;
+    const result = await processTelegramUpdate(
+      { message: { chat: { id: "other-chat" }, text: "Контекст другого чата" } },
+      "allowed-chat",
+      createDependencies({
+        consumeLifeContextMode: async () => {
+          consumeCount += 1;
+          return true;
+        }
+      })
+    );
+
+    expect(result).toBe("forbidden");
+    expect(consumeCount).toBe(0);
+  });
+
+  test("expired current-context mode falls back to normal Journal classification", async () => {
+    let journalCount = 0;
+    let contextCount = 0;
+    await processTelegramUpdate(
+      { message: { chat: { id: "allowed-chat" }, text: "Сегодня опять думаю, что работа забирает всё время." } },
+      "allowed-chat",
+      createDependencies({
+        consumeLifeContextMode: async () => false,
+        classifyInput: async () => "JOURNAL",
+        createPendingJournal: async () => {
+          journalCount += 1;
+          return "journal-pending-id";
+        },
+        createPendingLifeContext: async () => {
+          contextCount += 1;
+          return "context-pending-id";
+        }
+      })
+    );
+
+    expect(journalCount).toBe(1);
+    expect(contextCount).toBe(0);
+  });
+
+  test("current-context mode has a 30-minute TTL", () => {
+    const now = new Date("2026-09-03T12:00:00.000Z");
+    expect(lifeContextModeLifetimeMs).toBe(30 * 60 * 1000);
+    expect(lifeContextModeExpiresAt(now).toISOString()).toBe("2026-09-03T12:30:00.000Z");
   });
 
   test("requires a LifeContext preview before Apply and keeps storage unchanged", async () => {
@@ -1323,10 +1635,157 @@ test.describe("Telegram webhook core", () => {
     );
     expect(saved).toBe(0);
     expect(messages[0].text).toContain("Дневниковая запись");
-    expect(JSON.stringify(messages[0].markup)).toContain("journal_save:journal-pending-id");
+    const confirmationMarkup = JSON.stringify(messages[0].markup);
+    expect(confirmationMarkup).toContain("Сохранить в дневник");
+    expect(confirmationMarkup).toContain("journal_save:journal-pending-id");
+    expect(confirmationMarkup).toContain("В текущий контекст");
+    expect(confirmationMarkup).toContain("journal_context:journal-pending-id");
+    expect(confirmationMarkup).toContain("Отмена");
     expect(Object.keys(pendingEntry ?? {})).not.toContain("rawTranscript");
     expect(Object.keys(pendingEntry ?? {})).not.toContain("fileId");
     expect(Object.keys(pendingEntry ?? {})).not.toContain("audio");
+  });
+
+  test("converts a Journal draft to a LifeContext preview without saving either destination", async () => {
+    let journalSaveCount = 0;
+    let contextSaveCount = 0;
+    let convertCount = 0;
+    const messages: Array<{ text: string; markup?: unknown }> = [];
+
+    await processTelegramUpdate(
+      {
+        callback_query: {
+          id: "journal-context",
+          data: "journal_context:journal-pending-id",
+          message: { chat: { id: "allowed-chat" } }
+        }
+      },
+      "allowed-chat",
+      createDependencies({
+        convertPendingJournalToLifeContext: async (chatId, pendingId) => {
+          convertCount += 1;
+          expect(chatId).toBe("allowed-chat");
+          expect(pendingId).toBe("journal-pending-id");
+          return { pendingId: "context-from-journal", proposal: lifeContextProposal() };
+        },
+        savePendingJournal: async () => {
+          journalSaveCount += 1;
+          return { id: "journal-id", summary: richJournalEntry.summary };
+        },
+        savePendingLifeContext: async () => {
+          contextSaveCount += 1;
+          return "SAVED";
+        },
+        sendMessage: async (_chatId, text, markup) => {
+          messages.push({ text, markup });
+          return {};
+        }
+      })
+    );
+
+    expect(convertCount).toBe(1);
+    expect(journalSaveCount).toBe(0);
+    expect(contextSaveCount).toBe(0);
+    expect(messages[0].text).toContain("предлагаемые изменения");
+    expect(JSON.stringify(messages[0].markup)).toContain("context_apply:context-from-journal");
+    expect(JSON.stringify(messages[0].markup)).toContain("context_cancel:context-from-journal");
+  });
+
+  test("Journal conversion reuses only the processed pending representation", () => {
+    const input = journalToLifeContextInput(richJournalEntry);
+
+    expect(input).toEqual({
+      text: richJournalEntry.cleanedText,
+      source: "TELEGRAM_VOICE"
+    });
+    expect(input).not.toHaveProperty("rawTranscript");
+    expect(input).not.toHaveProperty("fileId");
+    expect(input).not.toHaveProperty("audio");
+  });
+
+  test("applies a converted Journal context only after the second confirmation", async () => {
+    let contextSaveCount = 0;
+    const dependencies = createDependencies({
+      convertPendingJournalToLifeContext: async () => ({
+        pendingId: "context-from-journal",
+        proposal: lifeContextProposal()
+      }),
+      savePendingLifeContext: async (_chatId, pendingId) => {
+        expect(pendingId).toBe("context-from-journal");
+        contextSaveCount += 1;
+        return "SAVED";
+      }
+    });
+
+    await processTelegramUpdate(
+      { callback_query: { id: "convert", data: "journal_context:journal-pending-id", message: { chat: { id: "allowed-chat" } } } },
+      "allowed-chat",
+      dependencies
+    );
+    expect(contextSaveCount).toBe(0);
+
+    await processTelegramUpdate(
+      { callback_query: { id: "apply", data: "context_apply:context-from-journal", message: { chat: { id: "allowed-chat" } } } },
+      "allowed-chat",
+      dependencies
+    );
+    expect(contextSaveCount).toBe(1);
+  });
+
+  test("canceling a converted Journal context changes nothing", async () => {
+    let contextSaveCount = 0;
+    let contextCancelCount = 0;
+    const dependencies = createDependencies({
+      convertPendingJournalToLifeContext: async () => ({
+        pendingId: "context-from-journal",
+        proposal: lifeContextProposal()
+      }),
+      cancelPendingLifeContext: async (_chatId, pendingId) => {
+        expect(pendingId).toBe("context-from-journal");
+        contextCancelCount += 1;
+        return true;
+      },
+      savePendingLifeContext: async () => {
+        contextSaveCount += 1;
+        return "SAVED";
+      }
+    });
+
+    await processTelegramUpdate(
+      { callback_query: { id: "convert", data: "journal_context:journal-pending-id", message: { chat: { id: "allowed-chat" } } } },
+      "allowed-chat",
+      dependencies
+    );
+    await processTelegramUpdate(
+      { callback_query: { id: "cancel-context", data: "context_cancel:context-from-journal", message: { chat: { id: "allowed-chat" } } } },
+      "allowed-chat",
+      dependencies
+    );
+
+    expect(contextCancelCount).toBe(1);
+    expect(contextSaveCount).toBe(0);
+  });
+
+  test("a repeated Journal conversion cannot create a duplicate pending context", async () => {
+    let available = true;
+    let draftCount = 0;
+    const dependencies = createDependencies({
+      convertPendingJournalToLifeContext: async () => {
+        if (!available) return null;
+        available = false;
+        draftCount += 1;
+        return { pendingId: "context-from-journal", proposal: lifeContextProposal() };
+      }
+    });
+
+    for (const id of ["convert-once", "convert-twice"]) {
+      await processTelegramUpdate(
+        { callback_query: { id, data: "journal_context:journal-pending-id", message: { chat: { id: "allowed-chat" } } } },
+        "allowed-chat",
+        dependencies
+      );
+    }
+    expect(draftCount).toBe(1);
   });
 
   test("Journal cancel creates no entry and Save sends feedback only after confirmation", async () => {
