@@ -373,6 +373,18 @@ model TelegramPendingJournal {
   @@index([expiresAt])
 }
 
+model TelegramPendingLifeContext {
+  id        String   @id @default(cuid())
+  chatId    String
+  userId    String
+  payload   Json
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([chatId, userId, expiresAt])
+  @@index([expiresAt])
+}
+
 model LifeContext {
   id               String   @id @default(cuid())
   userId           String   @unique

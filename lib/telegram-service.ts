@@ -19,8 +19,18 @@ import {
   telegramJournalSchema,
   type TelegramJournal
 } from "@/lib/journal";
+import {
+  applyLifeContextPatch,
+  parseTelegramLifeContextProposal,
+  telegramLifeContextProposalSchema,
+  type TelegramLifeContextProposal
+} from "@/lib/telegram-life-context";
 import { generateAndSaveDailyFeedback } from "@/lib/daily-feedback";
 import { parseDateInput, startOfWeek } from "@/lib/date-ranges";
+import {
+  lifeContextToPrisma,
+  normalizeLifeContext
+} from "@/lib/life-context";
 import { prisma } from "@/lib/prisma";
 import type { TelegramRuntimeConfig } from "@/lib/telegram-auth";
 import type { TelegramWebhookDependencies } from "@/lib/telegram-webhook-core";
@@ -87,6 +97,31 @@ async function createPendingJournal(chatId: string, entry: TelegramJournal) {
   return pending.id;
 }
 
+async function removeExpiredPendingLifeContexts(now = new Date()) {
+  await prisma.telegramPendingLifeContext.deleteMany({
+    where: { expiresAt: { lte: now } }
+  });
+}
+
+async function createPendingLifeContext(
+  chatId: string,
+  trackerUserId: string,
+  proposal: TelegramLifeContextProposal
+) {
+  const now = new Date();
+  await removeExpiredPendingLifeContexts(now);
+  const pending = await prisma.telegramPendingLifeContext.create({
+    data: {
+      chatId,
+      userId: trackerUserId,
+      payload: proposal as Prisma.InputJsonObject,
+      expiresAt: new Date(now.getTime() + pendingLifetimeMs)
+    },
+    select: { id: true }
+  });
+  return pending.id;
+}
+
 async function cancelPending(chatId: string, pendingId: string) {
   const result = await prisma.telegramPendingAction.deleteMany({
     where: {
@@ -114,6 +149,22 @@ async function cancelPendingJournal(chatId: string, pendingId: string) {
     where: {
       id: pendingId,
       chatId,
+      expiresAt: { gt: new Date() }
+    }
+  });
+  return result.count === 1;
+}
+
+async function cancelPendingLifeContext(
+  chatId: string,
+  pendingId: string,
+  trackerUserId: string
+) {
+  const result = await prisma.telegramPendingLifeContext.deleteMany({
+    where: {
+      id: pendingId,
+      chatId,
+      userId: trackerUserId,
       expiresAt: { gt: new Date() }
     }
   });
@@ -311,6 +362,66 @@ async function savePendingJournal(
   }
 }
 
+async function savePendingLifeContext(
+  chatId: string,
+  pendingId: string,
+  trackerUserId: string
+) {
+  return prisma.$transaction(async (transaction) => {
+    const now = new Date();
+    const pending = await transaction.telegramPendingLifeContext.findFirst({
+      where: {
+        id: pendingId,
+        chatId,
+        userId: trackerUserId,
+        expiresAt: { gt: now }
+      },
+      select: { payload: true }
+    });
+
+    if (!pending) return null;
+
+    const proposal = telegramLifeContextProposalSchema.safeParse(pending.payload);
+    if (!proposal.success) {
+      await transaction.telegramPendingLifeContext.deleteMany({
+        where: { id: pendingId, chatId, userId: trackerUserId }
+      });
+      return null;
+    }
+
+    const currentRow = await transaction.lifeContext.findUnique({
+      where: { userId: trackerUserId }
+    });
+    const current = normalizeLifeContext(currentRow);
+    if (current.updatedAt !== proposal.data.baseUpdatedAt) {
+      await transaction.telegramPendingLifeContext.deleteMany({
+        where: { id: pendingId, chatId, userId: trackerUserId }
+      });
+      return "STALE" as const;
+    }
+
+    const claimed = await transaction.telegramPendingLifeContext.deleteMany({
+      where: {
+        id: pendingId,
+        chatId,
+        userId: trackerUserId,
+        expiresAt: { gt: now }
+      }
+    });
+    if (claimed.count !== 1) return null;
+
+    const next = applyLifeContextPatch(current, proposal.data.patch);
+    const data = lifeContextToPrisma(next);
+    await transaction.lifeContext.upsert({
+      where: { userId: trackerUserId },
+      create: { userId: trackerUserId, ...data },
+      update: data
+    });
+
+    return "SAVED" as const;
+  });
+}
+
 function fallbackActionFromRecord(record: TelegramWorkRecord): TelegramDailyAction {
   const actionText = record.nextStep || `${record.title}. ${record.summary}`;
   return {
@@ -364,6 +475,16 @@ export function createTelegramDependencies(
     parseAction: (text) => parseTelegramDailyAction(text),
     parseWorkRecord: (text, source) => parseTelegramWorkRecord(text, source),
     parseJournal: (text, source) => parseTelegramJournal(text, source),
+    parseLifeContext: async (text, source) => {
+      const currentRow = await prisma.lifeContext.findUnique({
+        where: { userId: config.trackerUserId }
+      });
+      return parseTelegramLifeContextProposal(
+        text,
+        source,
+        normalizeLifeContext(currentRow)
+      );
+    },
     transcribeVoice: async (fileId) => {
       const audio = await downloadTelegramVoice(config.botToken, fileId);
       return transcribeTelegramVoice(audio);
@@ -371,15 +492,21 @@ export function createTelegramDependencies(
     createPending,
     createPendingWorkRecord,
     createPendingJournal,
+    createPendingLifeContext: (chatId, proposal) =>
+      createPendingLifeContext(chatId, config.trackerUserId, proposal),
     cancelPending,
     cancelPendingWorkRecord,
     cancelPendingJournal,
+    cancelPendingLifeContext: (chatId, pendingId) =>
+      cancelPendingLifeContext(chatId, pendingId, config.trackerUserId),
     savePending: (chatId, pendingId) =>
       savePending(chatId, pendingId, config.trackerUserId),
     savePendingWorkRecord: (chatId, pendingId) =>
       savePendingWorkRecord(chatId, pendingId, config.trackerUserId),
     savePendingJournal: (chatId, pendingId) =>
       savePendingJournal(chatId, pendingId, config.trackerUserId),
+    savePendingLifeContext: (chatId, pendingId) =>
+      savePendingLifeContext(chatId, pendingId, config.trackerUserId),
     convertPendingWorkRecord,
     sendMessage: (chatId, text, replyMarkup) =>
       sendTelegramMessage(config.botToken, chatId, text, replyMarkup),

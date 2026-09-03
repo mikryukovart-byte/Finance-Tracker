@@ -371,6 +371,28 @@ test.describe("smoke", () => {
     await expect(card.getByText(/удалена/)).toBeVisible();
   });
 
+  test("keeps manual LifeContext editing available in Advisor", async ({ page }) => {
+    await openAppPage(page, "/advisor", "Советник");
+    const originalResponse = await page.request.get("/api/life-context");
+    expect(originalResponse.ok()).toBeTruthy();
+    const original = await originalResponse.json();
+    const marker = `E2E ручное редактирование ${Date.now()}`;
+
+    try {
+      const updateResponse = await page.request.put("/api/life-context", {
+        data: { ...original, notes: marker }
+      });
+      expect(updateResponse.ok()).toBeTruthy();
+      const updated = await updateResponse.json();
+      expect(updated.notes).toBe(marker);
+    } finally {
+      const restoreResponse = await page.request.put("/api/life-context", {
+        data: original
+      });
+      expect(restoreResponse.ok()).toBeTruthy();
+    }
+  });
+
   test("generates and persists Advisor V2 only after an explicit request", async ({
     page,
     playwright

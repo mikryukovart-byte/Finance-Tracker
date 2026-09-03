@@ -56,7 +56,23 @@ export const telegramJournalSchema = z.object({
 
 export type TelegramJournal = z.infer<typeof telegramJournalSchema>;
 export type TelegramJournalSource = TelegramJournal["source"];
-export type TelegramInputKind = "ACTION" | "WORK_RECORD" | "JOURNAL";
+export type TelegramInputKind = "ACTION" | "WORK_RECORD" | "JOURNAL" | "LIFE_CONTEXT";
+
+export function hasExplicitLifeContextIntent(originalText: string) {
+  const text = originalText.trim().toLocaleLowerCase("ru-RU");
+  if (!text) return false;
+
+  return [
+    /(?:обнови|обновить|заполни|заполнить|измени|изменить|дополни|дополнить|очисти|очистить)\s+(?:мой\s+)?(?:текущ(?:ий|его)\s+)?контекст/,
+    /(?:добавь|добавить|запиши|записать|убери|убрать|удали|удалить|измени|изменить)\s+(?:в|из)\s+(?:мой\s+)?(?:текущ(?:ий|его)\s+)?(?:контекст|приоритеты|ограничения|активные проекты|действующие решения|решения|паузы|заметки)/,
+    /(?:измени|изменить|обнови|обновить)\s+(?:мои\s+)?(?:приоритеты|ограничения|активные проекты|действующие решения|решения|паузы)/,
+    /(?:добавь|добавить|запиши|записать),?\s+что\s+.+/,
+    /(?:убери|убрать|удали|удалить)\s+.+\s+из\s+(?:приоритетов|ограничений|активных проектов|действующих решений|решений|паузы|поставленного на паузу)/,
+    /(?:главн(?:ый|ая|ое)\s+)?приоритет.+\bтеперь\b/,
+    /решени[ея]\s+(?:больше\s+)?не\s+действует/,
+    /^(?:я\s+)?до(?:\s+конца)?\s+.+\s+не\s+увольня(?:юсь|ться)/
+  ].some((pattern) => pattern.test(text));
+}
 
 function openAiApiKey() {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -106,15 +122,15 @@ export async function classifyTelegramInput(
   if (!text) return "JOURNAL";
 
   const result = z.object({
-    kind: z.enum(["ACTION", "WORK_RECORD", "JOURNAL"]),
+    kind: z.enum(["ACTION", "WORK_RECORD", "JOURNAL", "LIFE_CONTEXT"]),
     confidence: z.number().min(0).max(1)
   }).parse(await structuredCompletion(
-    "telegram_input_kind_v2",
+    "telegram_input_kind_v3",
     {
       type: "object",
       additionalProperties: false,
       properties: {
-        kind: { type: "string", enum: ["ACTION", "WORK_RECORD", "JOURNAL"] },
+        kind: { type: "string", enum: ["ACTION", "WORK_RECORD", "JOURNAL", "LIFE_CONTEXT"] },
         confidence: { type: "number", minimum: 0, maximum: 1 }
       },
       required: ["kind", "confidence"]
@@ -127,6 +143,8 @@ export async function classifyTelegramInput(
           "ACTION — только явно уже совершенное конкретное коммерческое действие: касание, follow-up, созвон, отправленное предложение или названная цена.",
           "WORK_RECORD — намеренная структурированная рабочая заметка: решение, риск, гипотеза, рабочий план или идея.",
           "JOURNAL — свободное размышление, итоги дня, жизнь, работа в широком смысле, отношения, состояние, сомнения, планы, ценности или смешанная тема.",
+          "LIFE_CONTEXT — только явная команда заполнить или изменить постоянный текущий контекст, приоритеты, ограничения, активные проекты, сознательные паузы или действующие решения.",
+          "Для LIFE_CONTEXT требуется явный глагол изменения или недвусмысленная формулировка принятого долгосрочного решения. Размышления о работе, жизни и приоритетах сами по себе остаются JOURNAL.",
           "Длинное свободное голосовое по умолчанию является JOURNAL. При сомнении выбирай JOURNAL.",
           "Никогда не превращай дневниковое сообщение в ACTION из-за одного упомянутого возможного действия."
         ].join("\n")
@@ -134,6 +152,12 @@ export async function classifyTelegramInput(
       { role: "user", content: `Источник: ${source}\n\n${text}` }
     ]
   ));
+
+  if (result.kind === "LIFE_CONTEXT") {
+    return result.confidence >= 0.86 && hasExplicitLifeContextIntent(text)
+      ? "LIFE_CONTEXT"
+      : "JOURNAL";
+  }
 
   return result.confidence < 0.72 ? "JOURNAL" : result.kind;
 }

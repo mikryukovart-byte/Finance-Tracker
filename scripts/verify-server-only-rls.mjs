@@ -11,6 +11,7 @@ const tables = [
   "LifeContext",
   "TelegramPendingAction",
   "TelegramPendingJournal",
+  "TelegramPendingLifeContext",
   "TelegramPendingWorkRecord",
   "WeeklyDeliverySettings",
   "WorkRecord",

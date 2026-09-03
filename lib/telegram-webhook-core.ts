@@ -14,6 +14,10 @@ import {
   type TelegramJournal,
   type TelegramJournalSource
 } from "@/lib/journal";
+import type {
+  TelegramLifeContextProposal,
+  TelegramLifeContextSaveResult
+} from "@/lib/telegram-life-context";
 
 export type TelegramUpdate = {
   message?: {
@@ -48,19 +52,32 @@ export type TelegramWebhookDependencies = {
     text: string,
     source: Extract<TelegramJournalSource, "TELEGRAM_TEXT" | "TELEGRAM_VOICE">
   ): Promise<TelegramJournal | null>;
+  parseLifeContext(
+    text: string,
+    source: Extract<TelegramJournalSource, "TELEGRAM_TEXT" | "TELEGRAM_VOICE">
+  ): Promise<TelegramLifeContextProposal | null>;
   transcribeVoice(fileId: string): Promise<string>;
   createPending(chatId: string, action: TelegramDailyAction): Promise<string>;
   createPendingWorkRecord(chatId: string, record: TelegramWorkRecord): Promise<string>;
   createPendingJournal(chatId: string, entry: TelegramJournal): Promise<string>;
+  createPendingLifeContext(
+    chatId: string,
+    proposal: TelegramLifeContextProposal
+  ): Promise<string>;
   cancelPending(chatId: string, pendingId: string): Promise<boolean>;
   cancelPendingWorkRecord(chatId: string, pendingId: string): Promise<boolean>;
   cancelPendingJournal(chatId: string, pendingId: string): Promise<boolean>;
+  cancelPendingLifeContext(chatId: string, pendingId: string): Promise<boolean>;
   savePending(chatId: string, pendingId: string): Promise<TelegramSavedAction | null>;
   savePendingWorkRecord(chatId: string, pendingId: string): Promise<boolean>;
   savePendingJournal(
     chatId: string,
     pendingId: string
   ): Promise<{ id: string; summary: string; feedback?: string } | null>;
+  savePendingLifeContext(
+    chatId: string,
+    pendingId: string
+  ): Promise<TelegramLifeContextSaveResult | null>;
   convertPendingWorkRecord(
     chatId: string,
     pendingId: string
@@ -142,7 +159,7 @@ export function journalConfirmationText(entry: TelegramJournal) {
 }
 
 function parseCallbackData(value: string | undefined) {
-  const match = /^(save|cancel|work_save|work_convert|work_cancel|journal_save|journal_cancel):([a-zA-Z0-9_-]{1,48})$/.exec(
+  const match = /^(save|cancel|work_save|work_convert|work_cancel|journal_save|journal_cancel|context_apply|context_cancel):([a-zA-Z0-9_-]{1,48})$/.exec(
     value || ""
   );
 
@@ -158,7 +175,9 @@ function parseCallbackData(value: string | undefined) {
       | "work_convert"
       | "work_cancel"
       | "journal_save"
-      | "journal_cancel",
+      | "journal_cancel"
+      | "context_apply"
+      | "context_cancel",
     pendingId: match[2]
   };
 }
@@ -178,6 +197,40 @@ async function handleCallback(
 
   if (!parsed) {
     await dependencies.answerCallback(callback.id, "Команда устарела");
+    return;
+  }
+
+  if (parsed.command === "context_cancel") {
+    const canceled = await dependencies.cancelPendingLifeContext(chatId, parsed.pendingId);
+    await dependencies.answerCallback(callback.id, canceled ? "Отменено" : "Черновик недоступен");
+    await dependencies.sendMessage(
+      chatId,
+      canceled ? "Изменения текущего контекста отменены." : "Черновик уже недоступен или истёк."
+    );
+    return;
+  }
+
+  if (parsed.command === "context_apply") {
+    const saved = await dependencies.savePendingLifeContext(chatId, parsed.pendingId);
+    await dependencies.answerCallback(
+      callback.id,
+      saved === "SAVED" ? "Применено" : "Черновик недоступен"
+    );
+    if (saved === "SAVED") {
+      await dependencies.sendMessage(
+        chatId,
+        "Текущий контекст обновлен. Его можно посмотреть и отредактировать вручную в Советнике."
+      );
+      return;
+    }
+    if (saved === "STALE") {
+      await dependencies.sendMessage(
+        chatId,
+        "Текущий контекст изменился после создания preview. Отправь обновление ещё раз, чтобы не затереть новые данные."
+      );
+      return;
+    }
+    await dependencies.sendMessage(chatId, "Черновик уже недоступен или истёк.");
     return;
   }
 
@@ -321,6 +374,24 @@ async function parseAndConfirm(
       return;
     }
 
+    if (kind === "LIFE_CONTEXT") {
+      const proposal = await dependencies.parseLifeContext(text, source);
+
+      if (!proposal) {
+        await dependencies.sendMessage(chatId, unclearMessage);
+        return;
+      }
+
+      const pendingId = await dependencies.createPendingLifeContext(chatId, proposal);
+      await dependencies.sendMessage(chatId, proposal.preview, {
+        inline_keyboard: [[
+          { text: "✅ Применить", callback_data: `context_apply:${pendingId}` },
+          { text: "❌ Отмена", callback_data: `context_cancel:${pendingId}` }
+        ]]
+      });
+      return;
+    }
+
     const entry = await dependencies.parseJournal(text, source);
     if (!entry) {
       await dependencies.sendMessage(chatId, unclearMessage);
@@ -368,7 +439,7 @@ export async function processTelegramUpdate(
   if (text && /^\/start(?:@\w+)?(?:\s|$)/i.test(text)) {
     await dependencies.sendMessage(
       chatId,
-      "Я записываю действия, рабочие заметки и свободные дневниковые записи. Пришли текст или голосовое — перед сохранением я покажу, как понял сообщение."
+      "Я записываю действия, рабочие заметки, дневниковые записи и явные изменения текущего контекста. Пришли текст или голосовое — перед сохранением я покажу, как понял сообщение."
     );
     return "handled";
   }
