@@ -16,6 +16,7 @@ import {
   hasExplicitLifeContextIntent,
   journalMaxCompletionTokens,
   journalModel,
+  journalPreviewThoughts,
   parseTelegramJournal,
   TelegramJournalParseError,
   type TelegramJournal
@@ -62,10 +63,10 @@ const journalEntry: TelegramJournal = {
   entryDate: "2026-07-01",
   source: "TELEGRAM_VOICE",
   cleanedText: "Сегодня я много думал о работе и своих проектах. Пока не уверен, что нужно резко менять курс.",
-  summary: "Ты сопоставляешь работу и собственные проекты, но пока не принял решение менять курс.",
+  summary: "Я сопоставляю работу и собственные проекты, но пока не принял решение менять курс.",
   domains: ["EMPLOYMENT", "OWN_PROJECTS", "INNER_STATE"],
-  keyEvents: [{ text: "Сегодня размышлял о работе и своих проектах", kind: "FACT" }],
-  tensions: [{ text: "Хочется двигать свои проекты, но резкая смена курса пока вызывает сомнение", kind: "USER_INTERPRETATION" }],
+  keyEvents: [{ text: "Сегодня я размышлял о работе и своих проектах", kind: "FACT" }],
+  tensions: [{ text: "Я хочу двигать свои проекты, но резкая смена курса пока вызывает сомнение", kind: "USER_INTERPRETATION" }],
   decisions: null,
   questions: null,
   nextStep: null,
@@ -83,31 +84,31 @@ const richJournalEntry: TelegramJournal = {
   entryDate: "2026-09-03",
   source: "TELEGRAM_VOICE",
   cleanedText: [
-    "Я уже полгода живу в Москве и работаю исполнительным директором фотошколы. Мне нравится эта работа, потому что здесь я могу получить управленческий опыт перед запуском собственных проектов.",
-    "Я сознательно остаюсь в найме: сейчас это не отказ от собственного пути, а школа управления и способ быстрее закрыть долги. После появления стабильной работы и квартиры мне стало спокойнее, поэтому я снова начал уделять внимание отношениям.",
-    "Я хочу вернуть спорт и планирую начать ходить в зал в сентябре, но это пока намерение, а не жёсткое решение. По своему проекту я уже определил бизнес-модель, а 9 сентября встречаюсь с партнёром в Перми, чтобы обсудить следующий этап.",
-    "До конца сентября я решил не увольняться. Пока остаюсь в Москве, держу финансовый приоритет на быстром погашении долгов и проверяю, как совместить работу, отношения, спорт и развитие проекта без поспешных решений."
+    "Я уже около полугода живу в Москве и работаю исполнительным директором фотошколы с зарплатой 200 000 рублей в месяц. В моей команде три человека, я управляю процессами запуска школы, а сейчас мы готовим онлайн-направление и первый запуск онлайн-курсов. Мне нравится эта работа, потому что здесь я могу получить практический управленческий опыт перед запуском собственных проектов.",
+    "Я сознательно воспринимаю найм не как отказ от собственного пути, а как школу управления и источник стабильности. У меня остаётся 98 000 рублей долга по кредитной карте и около 39 000 рублей по другому кредиту, поэтому значительную часть зарплаты я направляю на их быстрое закрытие. За квартиру я плачу 28 000 рублей.",
+    "Раньше, пока базовая бытовая и финансовая опора была хуже закрыта, отношения почти не занимали моего внимания. После появления стабильной работы и квартиры мне стало спокойнее, и я снова начал ходить на свидания. Сейчас отношений у меня нет. Тренировок тоже пока нет: я хочу начать ходить в спортзал в сентябре и связываю спорт с большей энергией, но это пока намерение, а не принятое решение.",
+    "Параллельно я развиваю собственный проект: хочу помогать художникам из России и СНГ продавать работы клиентам в арабских странах, прежде всего отелям, ресторанам и девелоперским проектам. 9 сентября я лечу в Пермь встретиться с Эдуардом Копысовым и обсудить сотрудничество. Пока я планирую оставаться жить в Москве; моя семья живёт в Кирове, и иногда я приезжаю к ним."
   ].join("\n\n"),
   summary: [
-    "Ты уже полгода живёшь в Москве и сознательно используешь работу исполнительным директором фотошколы как место, где можно получить управленческий опыт перед собственными проектами. Найм сейчас для тебя не отказ от своего пути, а практическая школа управления и источник стабильности, пока финансовый приоритет — как можно быстрее закрыть долги.",
-    "После появления стабильной работы и квартиры тебе стало спокойнее, и ты сам связываешь это с возвращением внимания к отношениям. Ты хочешь вернуть спорт и планируешь начать зал в сентябре, но пока называешь это намерением. По собственному проекту уже есть бизнес-модель и конкретный следующий шаг — встреча 9 сентября в Перми."
+    "Я уже около полугода живу в Москве и работаю исполнительным директором фотошколы с зарплатой 200 000 рублей. Управляю командой из трёх человек и процессами запуска школы, включая новое онлайн-направление. Эта работа мне нравится, и я сознательно воспринимаю её как практическую школу управления перед собственными проектами, а не как отказ от своего пути.",
+    "Сейчас мой финансовый приоритет — быстро закрыть 98 000 рублей долга по кредитной карте и около 39 000 рублей другого кредита. Раньше, когда базовая бытовая и финансовая опора была хуже закрыта, отношения почти не занимали моего внимания. После появления стабильной работы и квартиры мне стало спокойнее, и я снова начал ходить на свидания. Сейчас отношений нет.",
+    "Я хочу вернуть спорт и планирую начать ходить в зал в сентябре, но это намерение, а не принятое решение. Параллельно развиваю проект по продаже работ художников из России и СНГ клиентам в арабских странах. Ближайшее конкретное событие — 9 сентября я лечу в Пермь на встречу с Эдуардом Копысовым, чтобы обсудить сотрудничество. Пока планирую оставаться в Москве."
   ].join("\n\n"),
   domains: ["MONEY", "EMPLOYMENT", "OWN_PROJECTS", "BODY_HEALTH", "RELATIONSHIPS"],
   keyEvents: [
-    { text: "Ты уже полгода живёшь в Москве и работаешь исполнительным директором фотошколы", kind: "FACT" },
-    { text: "Ты сам заметил: после появления стабильной работы и квартиры стало спокойнее, поэтому вернулось внимание к отношениям", kind: "USER_INTERPRETATION" },
-    { text: "9 сентября ты встречаешься с партнёром в Перми по собственному проекту", kind: "FACT" }
+    { text: "У меня остаётся 98 000 рублей долга по кредитной карте", kind: "FACT" },
+    { text: "Нынешнюю работу я воспринимаю как практическую школу управления перед собственными проектами", kind: "USER_INTERPRETATION" },
+    { text: "После появления стабильной работы и квартиры мне стало спокойнее, и я снова начал уделять внимание отношениям", kind: "USER_INTERPRETATION" },
+    { text: "У моего собственного проекта есть направление: продажи работ художников клиентам в арабских странах", kind: "USER_INTERPRETATION" },
+    { text: "9 сентября я лечу в Пермь на встречу с Эдуардом Копысовым по собственному проекту", kind: "FACT" }
   ],
   tensions: [{
-    text: "Ты совмещаешь стабильность найма с намерением развивать собственный проект",
+    text: "Я совмещаю стабильность найма с намерением развивать собственный проект",
     kind: "USER_INTERPRETATION"
   }],
-  decisions: [{
-    text: "Ты решил не увольняться до конца сентября",
-    kind: "FACT"
-  }],
+  decisions: null,
   questions: null,
-  nextStep: "9 сентября встретиться с партнёром в Перми и обсудить следующий этап проекта",
+  nextStep: "9 сентября я лечу в Пермь встретиться с Эдуардом Копысовым и обсудить сотрудничество",
   importance: "IMPORTANT"
 };
 
@@ -568,7 +569,9 @@ test.describe("Telegram webhook core", () => {
       const systemPrompt = requestBody.messages[0].content;
       expect(systemPrompt).toContain("120–250 слов");
       expect(systemPrompt).toContain("причинные связи");
-      expect(systemPrompt).toContain("Желание или намерение");
+      expect(systemPrompt).toContain("ОТ ПЕРВОГО ЛИЦА");
+      expect(systemPrompt).toContain("Не усиливай и не инвертируй причинность");
+      expect(systemPrompt).toContain("Строго различай решение, намерение и событие");
       expect(systemPrompt).toContain("Самостоятельно названная причинная связь — USER_INTERPRETATION");
     } finally {
       global.fetch = originalFetch;
@@ -580,37 +583,82 @@ test.describe("Telegram webhook core", () => {
     const preview = journalConfirmationText(richJournalEntry);
     const wordCount = preview.split(/\s+/).filter(Boolean).length;
 
-    expect(preview).toContain("Ты уже полгода живёшь в Москве");
-    expect(preview).toContain("управленческий опыт перед собственными проектами");
-    expect(preview).toContain("после появления стабильной работы и квартиры");
+    expect(preview).toContain("Я уже около полугода живу в Москве");
+    expect(preview).toContain("школу управления перед собственными проектами");
+    expect(preview).toContain("После появления стабильной работы и квартиры");
     expect(preview).toContain("9 сентября");
-    expect(preview).not.toMatch(/\b(?:Автор|Пользователь|Субъект)\b/i);
+    expect(preview).not.toMatch(/\b(?:Автор|Пользователь|Субъект)\b|Ты\s*:/i);
+    expect(preview).not.toContain("отношений нет из-за финансов");
+    expect(preview).not.toContain("пока не закрою долги, не могу заниматься отношениями");
     expect(wordCount).toBeGreaterThanOrEqual(120);
     expect(wordCount).toBeLessThanOrEqual(250);
   });
 
-  test("removes forbidden third-person labels from Journal preview defensively", () => {
+  test("removes forbidden technical prefixes from Journal preview defensively", () => {
     const preview = journalConfirmationText({
       ...journalEntry,
-      summary: "Автор работает в найме и развивает собственный проект.",
-      keyEvents: [{ text: "Пользователь назначил встречу на 9 сентября", kind: "FACT" }],
-      tensions: [{ text: "Субъект связывает стабильность с возвращением внимания к отношениям", kind: "USER_INTERPRETATION" }]
+      summary: "Автор: Я работаю в найме и развиваю собственный проект.",
+      keyEvents: [{ text: "Пользователь: Я назначил встречу на 9 сентября", kind: "FACT" }],
+      tensions: [{ text: "Субъект: Я связываю стабильность с возвращением внимания к отношениям", kind: "USER_INTERPRETATION" }],
+      nextStep: "Ты: 9 сентября я встречаюсь с партнёром"
     });
 
-    expect(preview).not.toMatch(/(?:Автор|Пользователь|Субъект)/i);
-    expect(preview).toContain("Ты:");
+    expect(preview).not.toMatch(/(?:Автор|Пользователь|Субъект|Ты)\s*:/i);
+    expect(preview).toContain("Я работаю в найме");
+    expect(preview).toContain("9 сентября я встречаюсь с партнёром");
   });
 
-  test("keeps first-person cleaned text and does not merge decisions, intentions and events", () => {
+  test("keeps first-person cleaned text and does not merge intentions with decisions or events", () => {
     expect(richJournalEntry.cleanedText).toMatch(/(^|[^А-ЯЁа-яё])Я(?=$|[^А-ЯЁа-яё])/);
     expect(richJournalEntry.cleanedText.length).toBeGreaterThan(800);
     expect(richJournalEntry.cleanedText.split(/[.!?]+/).filter(Boolean).length).toBeGreaterThan(3);
-    expect(richJournalEntry.decisions?.map((item) => item.text).join(" "))
-      .toContain("не увольняться до конца сентября");
-    expect(richJournalEntry.decisions?.map((item) => item.text).join(" "))
-      .not.toContain("зал");
-    expect(richJournalEntry.summary).toContain("пока называешь это намерением");
+    expect(richJournalEntry.decisions).toBeNull();
+    expect(richJournalEntry.summary).toContain("намерение, а не принятое решение");
     expect(richJournalEntry.nextStep).toContain("9 сентября");
+  });
+
+  test("prioritizes motivation, user causality and own-project trajectory over a simple debt fact", () => {
+    const thoughts = journalPreviewThoughts(richJournalEntry);
+
+    expect(thoughts).toHaveLength(3);
+    expect(thoughts[0]).toContain("школу управления перед собственными проектами");
+    expect(thoughts).toContain("После появления стабильной работы и квартиры мне стало спокойнее, и я снова начал уделять внимание отношениям");
+    expect(thoughts).toContain("У моего собственного проекта есть направление: продажи работ художников клиентам в арабских странах");
+    expect(thoughts.join(" ")).not.toContain("98 000 рублей долга");
+  });
+
+  test("retries Journal output with a forbidden actor label or an intention classified as a decision", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const originalConsoleError = console.error;
+    const logs: unknown[][] = [];
+    let attempt = 0;
+    process.env.OPENAI_API_KEY = "test-key";
+    console.error = (...args) => { logs.push(args); };
+    global.fetch = async () => {
+      attempt += 1;
+      return attempt === 1
+        ? chatCompletionResponse(journalOutput({
+            summary: "Пользователь: работает в найме и думает о собственном проекте.",
+            decisions: [{ text: "Я хочу начать ходить в спортзал", kind: "USER_INTERPRETATION" }]
+          }))
+        : chatCompletionResponse(journalOutput());
+    };
+    try {
+      const parsed = await parseTelegramJournal(
+        "Я работаю в найме, думаю о собственном проекте и хочу начать ходить в спортзал.",
+        "TELEGRAM_TEXT"
+      );
+      expect(parsed?.summary).toBe(journalEntry.summary);
+      expect(parsed?.decisions).toBeNull();
+      expect(attempt).toBe(2);
+      expect(JSON.stringify(logs)).toContain("preview_forbidden_actor_label");
+      expect(JSON.stringify(logs)).toContain("intention_misclassified_as_decision");
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+      console.error = originalConsoleError;
+    }
   });
 
   test("repairs a malformed structured Journal response once without resending the transcript", async () => {
@@ -697,7 +745,7 @@ test.describe("Telegram webhook core", () => {
       return attempt === 1
         ? chatCompletionResponse(journalOutput({
             cleanedText: "Я работаю в найме и развиваю свой проект.",
-            summary: "Ты работаешь в найме и развиваешь свой проект."
+            summary: "Я работаю в найме и развиваю свой проект."
           }))
         : chatCompletionResponse(journalOutput({ cleanedText: longCleanedText }));
     };

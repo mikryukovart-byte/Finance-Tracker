@@ -20,6 +20,7 @@ export const journalEvidenceKinds = [
   "AI_INTERPRETATION"
 ] as const;
 export const journalImportanceValues = ["NORMAL", "IMPORTANT"] as const;
+type JournalEvidenceKind = (typeof journalEvidenceKinds)[number];
 
 export const journalDomainLabels: Record<(typeof journalDomains)[number], string> = {
   MONEY: "Деньги",
@@ -353,7 +354,7 @@ function journalRetryMessages(
         content: [
           message.content,
           reason === "CONTENT_QUALITY"
-            ? "Это повторная попытка: cleanedText должен остаться подробным текстом от первого лица, а summary — плотным preview через «ты» без слов «автор», «пользователь» и «субъект»."
+            ? "Это повторная попытка: cleanedText должен остаться подробным текстом от первого лица, а summary и тезисы preview — естественным текстом от первого лица без обращений и технических обозначений говорящего. Не усиливай причинность и не записывай желания или планы в decisions."
             : "Это повторная попытка: обязательно заверши весь JSON в пределах доступного output budget."
         ].join("\n")
       }
@@ -463,23 +464,54 @@ function hasRussianWord(text: string, word: string) {
   ).test(text);
 }
 
+function hasFirstPersonVoice(text: string) {
+  return ["я", "мне", "меня", "мной", "мой", "моя", "моё", "мои"].some((word) => (
+    hasRussianWord(text, word)
+  ));
+}
+
+function journalPreviewFields(entry: Omit<TelegramJournal, "source">) {
+  return [
+    entry.summary,
+    ...(entry.keyEvents ?? []).map((item) => item.text),
+    ...(entry.tensions ?? []).map((item) => item.text),
+    ...(entry.decisions ?? []).map((item) => item.text),
+    ...(entry.questions ?? []).map((item) => item.text),
+    ...(entry.nextStep ? [entry.nextStep] : [])
+  ];
+}
+
+function startsAsIntention(text: string) {
+  return /^(?:я\s+)?(?:хочу|хотел(?:а)?\s+бы|планирую|собираюсь|думаю|рассматриваю|возможно|может\s+быть)(?=$|[^А-ЯЁа-яё])/i
+    .test(text.trim());
+}
+
 function journalQualityIssues(
   entry: Omit<TelegramJournal, "source">,
   originalText: string,
   isLongEntry: boolean
 ) {
   const issues: string[] = [];
-  if (["автор", "пользователь", "субъект"].some((word) => hasRussianWord(entry.summary, word))) {
-    issues.push("preview_third_person");
+  const previewFields = journalPreviewFields(entry);
+  if (previewFields.some((field) => (
+    ["автор", "пользователь", "субъект"].some((word) => hasRussianWord(field, word))
+    || /(?:^|\n)\s*ты\s*:/i.test(field)
+  ))) {
+    issues.push("preview_forbidden_actor_label");
   }
-  if (!hasRussianWord(entry.summary, "ты")) {
-    issues.push("preview_missing_second_person");
+  if (!hasFirstPersonVoice(entry.summary)) {
+    issues.push("preview_missing_first_person");
   }
   if (hasRussianWord(originalText, "я") && !hasRussianWord(entry.cleanedText, "я")) {
     issues.push("cleaned_text_missing_first_person");
   }
-  if (isLongEntry && entry.cleanedText.split(/\s+/).filter(Boolean).length < 180) {
+  const originalWordCount = originalText.split(/\s+/).filter(Boolean).length;
+  const cleanedWordCount = entry.cleanedText.split(/\s+/).filter(Boolean).length;
+  if (isLongEntry && cleanedWordCount < Math.max(180, Math.floor(originalWordCount * 0.45))) {
     issues.push("cleaned_text_too_short_for_long_entry");
+  }
+  if ((entry.decisions ?? []).some((item) => startsAsIntention(item.text))) {
+    issues.push("intention_misclassified_as_decision");
   }
   return issues;
 }
@@ -525,22 +557,25 @@ export async function parseTelegramJournal(
         content: [
           "Создай структурированную дневниковую запись на русском без выдуманных фактов.",
           `Сегодня: ${todayInAmsterdam(now)}.`,
-          "cleanedText — бережно отредактированная речь автора ОТ ПЕРВОГО ЛИЦА, а не summary.",
-          "В cleanedText используй «я» и сохрани ход мысли, аргументацию, сомнения, мотивацию, объяснение решений, причинные связи, эмоциональный оттенок и значимые детали.",
-          "Для длинной содержательной расшифровки cleanedText должен оставаться подробным текстом, а не выжимкой из двух-трёх предложений.",
+          "cleanedText — бережно отредактированная речь от ПЕРВОГО ЛИЦА, а не summary.",
+          "В cleanedText используй «я» и сохрани ход мысли, аргументацию, сомнения, отношение к происходящему, мотивацию, объяснение решений, причинные связи, эмоциональный оттенок и значимые детали.",
+          "Для длинной содержательной расшифровки cleanedText должен сохранять примерно 60–85% смыслового содержания: планы, существенные суммы, даты, людей и проекты. Это подробный дневниковый текст, а не сухая выжимка из двух-трёх предложений.",
           "Удали только слова-паразиты, оговорки, случайные повторы и очевидный речевой шум.",
           "Запрещено переписывать от третьего лица, делать корпоративную выжимку, превращать сомнение в уверенность, диагностировать или выдумывать мотивы.",
-          "summary — компактный Telegram preview во ВТОРОМ ЛИЦЕ с обращением «ты». Никогда не используй слова «автор», «пользователь» или «субъект».",
+          "summary — компактный Telegram preview ОТ ПЕРВОГО ЛИЦА, как личная дневниковая запись. Используй естественные формулировки с «я», «мне», «мой»; не обращайся к человеку через «ты».",
+          "Во всех текстах preview категорически запрещены слова-ярлыки и префиксы «Автор:», «Пользователь:», «Субъект:», «Ты:». Не начинай ими ни summary, ни отдельный тезис.",
           isLongEntry
             ? "Для этой длинной записи summary должен содержать 120–250 слов: 2–4 плотных абзаца без искусственного заполнения объёма."
             : "Для этой короткой записи summary должен быть заметно короче и не повторять cleanedText целиком.",
-          "В summary приоритетны: что происходит; почему это важно именно тебе; причинные связи, которые ты сам назвал; реальные решения; планы и намерения; конкретный ближайший шаг или событие.",
-          "Сохраняй пользовательскую мотивацию и self-observed causal links буквально по смыслу. Не заменяй их внешней AI-интерпретацией.",
+          "В summary приоритетны: что происходит; почему это важно для меня; причинные связи, которые я сам назвал; реальные решения; корректно обозначенные планы и намерения; конкретный ближайший шаг или событие.",
+          "Сохраняй названную человеком мотивацию и причинные связи буквально по смыслу. Не усиливай и не инвертируй причинность, не достраивай психологическое объяснение и не превращай временную последовательность в связь «из-за». Если связь не заявлена явно, оставь события раздельными.",
+          "Если человек сам объяснил причинную связь, сохрани её направление и силу и пометь соответствующий тезис USER_INTERPRETATION. При сомнении ослабь формулировку, а не усиливай её.",
           "domains — все действительно затронутые сферы.",
-          "keyEvents — произошедшие факты и явно назначенные будущие события; tensions — только названные тобой противоречия; decisions — только явно принятые решения; questions — только реальные открытые вопросы.",
-          "Желание или намерение называй «хочу», «планирую» или «намерен», но не записывай в decisions. Размышление не является решением. Назначенная встреча или поездка — событие/следующий шаг, а не решение.",
+          "keyEvents — произошедшие значимые факты, важные изменения траектории и явно назначенные будущие события; tensions — только названные мной противоречия; decisions — только явно принятые решения; questions — только реальные открытые вопросы.",
+          "Для «Что важно» выделяй в keyEvents/tensions 2–3 самых стратегичных смысла: мотивацию, изменение жизненной стратегии или состояния, мою причинную связь, траекторию собственного проекта, принятое решение или конкретный следующий шаг. Не повышай приоритет тезиса только из-за негативности, суммы или порядка появления.",
+          "Строго различай решение, намерение и событие. Желание или намерение называй «хочу», «планирую» или «намерен», но не записывай в decisions без отдельного явного commitment. Размышление не является решением. Назначенная встреча, поездка или дедлайн — событие/nextStep, а не решение.",
           "Каждый структурный элемент пометь FACT, USER_INTERPRETATION или AI_INTERPRETATION. Самостоятельно названная причинная связь — USER_INTERPRETATION. AI_INTERPRETATION используй только при явной необходимости и формулируй как гипотезу.",
-          "Тексты keyEvents, tensions, decisions и questions, которые могут попасть в preview, также формулируй через «ты», без третьего лица.",
+          "Тексты keyEvents, tensions, decisions и questions, которые могут попасть в preview, также формулируй естественно от первого лица. Не используй третье лицо и технические обозначения говорящего.",
           "nextStep добавляй только для реально названного ближайшего шага или конкретного будущего события. По умолчанию importance=NORMAL.",
           "Не добавляй советы, мотивацию, терапевтические или медицинские выводы."
         ].join("\n")
@@ -560,21 +595,40 @@ export async function parseTelegramJournal(
 
 export function journalPreviewThoughts(entry: TelegramJournal) {
   const candidates = [
-    ...(entry.tensions ?? []).filter((item) => item.kind === "USER_INTERPRETATION"),
-    ...(entry.keyEvents ?? []).filter((item) => item.kind === "USER_INTERPRETATION"),
-    ...(entry.keyEvents ?? []).filter((item) => item.kind === "FACT"),
-    ...(entry.tensions ?? []).filter((item) => item.kind === "FACT"),
-    ...(entry.questions ?? []).filter((item) => item.kind !== "AI_INTERPRETATION")
-  ];
+    ...(entry.keyEvents ?? []),
+    ...(entry.tensions ?? []),
+    ...(entry.questions ?? [])
+  ].filter((item) => item.kind !== "AI_INTERPRETATION");
   const seen = new Set<string>();
 
   return candidates
-    .map((item) => item.text.trim())
+    .map((item, index) => ({
+      text: item.text.trim(),
+      index,
+      score: journalThoughtPriority(item.text, item.kind)
+    }))
     .filter((item) => {
-      const key = item.toLocaleLowerCase("ru-RU");
+      const key = item.text.toLocaleLowerCase("ru-RU");
       if (!key || seen.has(key)) return false;
       seen.add(key);
       return true;
     })
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map((item) => item.text)
     .slice(0, 3);
+}
+
+function journalThoughtPriority(text: string, kind: JournalEvidenceKind) {
+  const normalized = text.toLocaleLowerCase("ru-RU");
+  const has = (pattern: RegExp) => pattern.test(normalized);
+  let score = kind === "USER_INTERPRETATION" ? 80 : 20;
+
+  if (has(/(?:потому\s+что|чтобы|для\s+того|зачем|воспринима|рассматрива|как\s+(?:способ|возможность)|да[её]т\s+мне)/)) score += 60;
+  if (has(/(?:после|когда|поэтому|из-за|благодаря|связыва|стало)/)) score += 50;
+  if (has(/(?:стратег|траектор|приоритет|курс|сознательно|изменил|изменила|начал|начала)/)) score += 35;
+  if (has(/(?:сво(?:й|его|ему|им|их)|собственн(?:ый|ого|ому|ым|ых))\s+проект|проект(?:а|у|ом|ы|ов|ам|ами|ах)?/)) score += 40;
+  if (has(/(?:решил|решила|выбираю|остаюсь|буду)/)) score += 25;
+  if (has(/(?:встреч|поезд|лечу|еду|дедлайн|следующ(?:ий|ая|ее)\s+шаг)/) || /(?:^|[^0-9])\d{1,2}\s+[а-яё]+(?=$|[^а-яё])/i.test(normalized)) score += 35;
+
+  return score;
 }

@@ -147,12 +147,12 @@ export function workRecordConfirmationText(record: TelegramWorkRecord) {
 
 export function journalConfirmationText(entry: TelegramJournal) {
   const thoughts = journalPreviewThoughts(entry);
-  const decisions = entry.decisions?.map((item) => item.text).slice(0, 2) ?? [];
+  const decisions = entry.decisions?.map((item) => safeJournalPreviewText(item.text)).slice(0, 2) ?? [];
   const lines = [
     "Дневниковая запись",
     "",
     "Суть:",
-    personalPreviewText(entry.summary),
+    safeJournalPreviewText(entry.summary),
     "",
     `Сферы: ${entry.domains.map((domain) => journalDomainLabels[domain]).join(", ")}`
   ];
@@ -161,21 +161,21 @@ export function journalConfirmationText(entry: TelegramJournal) {
     lines.push(
       "",
       "Что важно:",
-      ...thoughts.map((thought) => `• ${compactPreviewText(personalPreviewText(thought), 260)}`)
+      ...thoughts.map((thought) => `• ${compactPreviewText(safeJournalPreviewText(thought), 260)}`)
     );
   }
   if (decisions.length) {
     lines.push(
       "",
       "Решения:",
-      ...decisions.map((decision) => `• ${compactPreviewText(personalPreviewText(decision), 260)}`)
+      ...decisions.map((decision) => `• ${compactPreviewText(decision, 260)}`)
     );
   }
   if (entry.nextStep) {
     lines.push(
       "",
       "Ближайший шаг / событие:",
-      compactPreviewText(personalPreviewText(entry.nextStep), 420)
+      compactPreviewText(safeJournalPreviewText(entry.nextStep), 420)
     );
   }
   lines.push("", "Выбери действие:");
@@ -187,17 +187,10 @@ function compactPreviewText(value: string, maxLength: number) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1).trimEnd()}…` : text;
 }
 
-function personalPreviewText(value: string) {
-  const withoutThirdPerson = value
-    .replace(
-      /(^|[^А-ЯЁа-яё])(?:автор|пользователь|субъект)(?=$|[^А-ЯЁа-яё])[\s,:—-]*/gi,
-      "$1"
-    )
+function safeJournalPreviewText(value: string) {
+  return value
+    .replace(/^(?:(?:автор|пользователь|субъект|ты)\s*:\s*)+/i, "")
     .trim();
-  if (/(^|[^А-ЯЁа-яё])ты(?=$|[^А-ЯЁа-яё])/i.test(withoutThirdPerson)) {
-    return withoutThirdPerson;
-  }
-  return `Ты: ${withoutThirdPerson}`;
 }
 
 const lifeContextModePrompt =
