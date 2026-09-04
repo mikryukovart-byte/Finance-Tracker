@@ -627,14 +627,17 @@ test.describe("Telegram webhook core", () => {
     expect(thoughts.join(" ")).not.toContain("98 000 рублей долга");
   });
 
-  test("retries Journal output with a forbidden actor label or an intention classified as a decision", async () => {
+  test("repairs an intention locally but still retries a fatal forbidden actor label", async () => {
     const originalFetch = global.fetch;
     const originalApiKey = process.env.OPENAI_API_KEY;
     const originalConsoleError = console.error;
-    const logs: unknown[][] = [];
+    const originalConsoleWarn = console.warn;
+    const failureLogs: unknown[][] = [];
+    const repairLogs: unknown[][] = [];
     let attempt = 0;
     process.env.OPENAI_API_KEY = "test-key";
-    console.error = (...args) => { logs.push(args); };
+    console.error = (...args) => { failureLogs.push(args); };
+    console.warn = (...args) => { repairLogs.push(args); };
     global.fetch = async () => {
       attempt += 1;
       return attempt === 1
@@ -652,12 +655,161 @@ test.describe("Telegram webhook core", () => {
       expect(parsed?.summary).toBe(journalEntry.summary);
       expect(parsed?.decisions).toBeNull();
       expect(attempt).toBe(2);
-      expect(JSON.stringify(logs)).toContain("preview_forbidden_actor_label");
-      expect(JSON.stringify(logs)).toContain("intention_misclassified_as_decision");
+      expect(JSON.stringify(failureLogs)).toContain("preview_forbidden_actor_label");
+      expect(JSON.stringify(failureLogs)).not.toContain("intention_misclassified_as_decision");
+      expect(JSON.stringify(repairLogs)).toContain("intention_misclassified_as_decision");
     } finally {
       global.fetch = originalFetch;
       process.env.OPENAI_API_KEY = originalApiKey;
       console.error = originalConsoleError;
+      console.warn = originalConsoleWarn;
+    }
+  });
+
+  test("repairs one intention in decisions without an OpenAI retry or semantic loss", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const originalConsoleWarn = console.warn;
+    const logs: unknown[][] = [];
+    const cleanedText = "Я хочу начать ходить в спортзал в сентябре. 9 сентября я лечу в Пермь на встречу.";
+    const summary = "Я хочу начать ходить в спортзал в сентябре, но это пока план. 9 сентября я лечу в Пермь.";
+    let requestCount = 0;
+    process.env.OPENAI_API_KEY = "test-key";
+    console.warn = (...args) => { logs.push(args); };
+    global.fetch = async () => {
+      requestCount += 1;
+      return chatCompletionResponse(journalOutput({
+        cleanedText,
+        summary,
+        decisions: [{ text: "Я хочу начать ходить в спортзал в сентябре", kind: "USER_INTERPRETATION" }],
+        keyEvents: [{ text: "9 сентября я лечу в Пермь", kind: "FACT" }],
+        nextStep: "9 сентября я лечу в Пермь"
+      }));
+    };
+    try {
+      const parsed = await parseTelegramJournal(cleanedText, "TELEGRAM_VOICE");
+
+      expect(requestCount).toBe(1);
+      expect(parsed?.decisions).toBeNull();
+      expect(parsed?.cleanedText).toBe(cleanedText);
+      expect(parsed?.summary).toBe(summary);
+      expect(parsed?.nextStep).toBe("9 сентября я лечу в Пермь");
+      expect(logs).toHaveLength(1);
+      expect(logs[0]?.[1]).toEqual({
+        parser: "telegram_journal_entry",
+        repair: "intention_misclassified_as_decision",
+        repairedCount: 1
+      });
+      expect(JSON.stringify(logs)).not.toContain("спортзал");
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+      console.warn = originalConsoleWarn;
+    }
+  });
+
+  test("repairs several intentions without duplicates and preserves an explicit decision", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const originalConsoleWarn = console.warn;
+    const logs: unknown[][] = [];
+    const intentionEvent = { text: "Я хочу начать ходить в спортзал в сентябре", kind: "USER_INTERPRETATION" as const };
+    let requestCount = 0;
+    process.env.OPENAI_API_KEY = "test-key";
+    console.warn = (...args) => { logs.push(args); };
+    global.fetch = async () => {
+      requestCount += 1;
+      return chatCompletionResponse(journalOutput({
+        cleanedText: "Я хочу вернуть спорт и планирую больше отдыхать. Я решил сохранить текущий рабочий режим до конца месяца.",
+        summary: "Я хочу вернуть спорт и планирую отдых. При этом я решил сохранить текущий рабочий режим до конца месяца.",
+        keyEvents: [intentionEvent],
+        decisions: [
+          intentionEvent,
+          { text: "Планирую больше отдыхать", kind: "USER_INTERPRETATION" },
+          { text: "Я решил сохранить текущий рабочий режим до конца месяца", kind: "FACT" }
+        ]
+      }));
+    };
+    try {
+      const parsed = await parseTelegramJournal(
+        "Я хочу вернуть спорт и планирую больше отдыхать. Я решил сохранить текущий рабочий режим до конца месяца.",
+        "TELEGRAM_TEXT"
+      );
+
+      expect(requestCount).toBe(1);
+      expect(parsed?.decisions).toEqual([
+        { text: "Я решил сохранить текущий рабочий режим до конца месяца", kind: "FACT" }
+      ]);
+      expect(parsed?.keyEvents).toEqual([intentionEvent]);
+      expect(parsed?.keyEvents?.filter((item) => item.text === intentionEvent.text)).toHaveLength(1);
+      expect(logs[0]?.[1]).toMatchObject({ repairedCount: 2 });
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+      console.warn = originalConsoleWarn;
+    }
+  });
+
+  test("keeps an explicit decision unchanged and performs no semantic repair", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const originalConsoleWarn = console.warn;
+    const logs: unknown[][] = [];
+    let requestCount = 0;
+    process.env.OPENAI_API_KEY = "test-key";
+    console.warn = (...args) => { logs.push(args); };
+    global.fetch = async () => {
+      requestCount += 1;
+      return chatCompletionResponse(journalOutput({
+        decisions: [{ text: "Я решил сохранить текущий рабочий режим до конца месяца", kind: "FACT" }]
+      }));
+    };
+    try {
+      const parsed = await parseTelegramJournal(
+        "Я решил сохранить текущий рабочий режим до конца месяца.",
+        "TELEGRAM_TEXT"
+      );
+
+      expect(requestCount).toBe(1);
+      expect(parsed?.decisions).toEqual([
+        { text: "Я решил сохранить текущий рабочий режим до конца месяца", kind: "FACT" }
+      ]);
+      expect(logs).toHaveLength(0);
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+      console.warn = originalConsoleWarn;
+    }
+  });
+
+  test("accepts a long Journal after local intention repair without retrying the model", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const originalConsoleWarn = console.warn;
+    const { source: _source, ...richOutput } = richJournalEntry;
+    let requestCount = 0;
+    process.env.OPENAI_API_KEY = "test-key";
+    console.warn = () => undefined;
+    global.fetch = async () => {
+      requestCount += 1;
+      return chatCompletionResponse({
+        ...richOutput,
+        cleanedText: `${longCleanedText} Я хочу начать ходить в спортзал в сентябре.`,
+        decisions: [{ text: "Я хочу начать ходить в спортзал в сентябре", kind: "USER_INTERPRETATION" }]
+      });
+    };
+    try {
+      const parsed = await parseTelegramJournal(longTranscript, "TELEGRAM_VOICE");
+
+      expect(requestCount).toBe(1);
+      expect(parsed?.decisions).toBeNull();
+      expect(parsed?.cleanedText).toContain("хочу начать ходить в спортзал");
+      expect(parsed?.summary).toContain("намерение, а не принятое решение");
+      expect(parsed?.nextStep).toContain("9 сентября");
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+      console.warn = originalConsoleWarn;
     }
   });
 

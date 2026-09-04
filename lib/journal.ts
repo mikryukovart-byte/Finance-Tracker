@@ -152,6 +152,14 @@ function logJournalFailure(reason: JournalFailureReason, details: JournalDiagnos
   });
 }
 
+function logJournalRepair(repairedCount: number) {
+  console.warn("OpenAI structured parser repair", {
+    parser: "telegram_journal_entry",
+    repair: "intention_misclassified_as_decision",
+    repairedCount
+  });
+}
+
 async function structuredCompletion(
   name: string,
   schema: Record<string, unknown>,
@@ -314,7 +322,8 @@ async function journalStructuredAttempt(
     throw new JournalAttemptError("SCHEMA_VALIDATION", true, content);
   }
 
-  const qualityIssues = validateQuality(parsed.data);
+  const normalized = normalizeRepairableJournalIssues(parsed.data);
+  const qualityIssues = validateQuality(normalized);
   if (qualityIssues.length > 0) {
     logJournalFailure("CONTENT_QUALITY", {
       attempt,
@@ -327,7 +336,7 @@ async function journalStructuredAttempt(
     throw new JournalAttemptError("CONTENT_QUALITY", true);
   }
 
-  return parsed.data;
+  return normalized;
 }
 
 function journalRepairMessages(content: string) {
@@ -482,8 +491,27 @@ function journalPreviewFields(entry: Omit<TelegramJournal, "source">) {
 }
 
 function startsAsIntention(text: string) {
+  const normalized = text.trim();
+  const hasExplicitCommitment = /(?:^|[^А-ЯЁа-яё])(?:решил(?:а)?|принял(?:а)?\s+решение|выбираю|точно\s+буду|обязуюсь)(?=$|[^А-ЯЁа-яё])/i
+    .test(normalized);
+  if (hasExplicitCommitment) return false;
+
   return /^(?:я\s+)?(?:хочу|хотел(?:а)?\s+бы|планирую|собираюсь|думаю|рассматриваю|возможно|может\s+быть)(?=$|[^А-ЯЁа-яё])/i
-    .test(text.trim());
+    .test(normalized);
+}
+
+function normalizeRepairableJournalIssues(entry: Omit<TelegramJournal, "source">) {
+  const decisions = entry.decisions ?? [];
+  const normalizedDecisions = decisions.filter((item) => !startsAsIntention(item.text));
+  const repairedCount = decisions.length - normalizedDecisions.length;
+
+  if (repairedCount === 0) return entry;
+  logJournalRepair(repairedCount);
+
+  return {
+    ...entry,
+    decisions: normalizedDecisions.length > 0 ? normalizedDecisions : null
+  };
 }
 
 function journalQualityIssues(
