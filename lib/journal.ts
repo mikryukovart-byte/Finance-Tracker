@@ -58,6 +58,13 @@ export const telegramJournalSchema = z.object({
 export type TelegramJournal = z.infer<typeof telegramJournalSchema>;
 export type TelegramJournalSource = TelegramJournal["source"];
 export type TelegramInputKind = "ACTION" | "WORK_RECORD" | "JOURNAL" | "LIFE_CONTEXT";
+export type JournalPreviewModel = {
+  summary: string;
+  domains: TelegramJournal["domains"];
+  importantPoints: string[];
+  decisions: string[];
+  nextStep: string | null;
+};
 
 export function hasExplicitLifeContextIntent(originalText: string) {
   const text = originalText.trim().toLocaleLowerCase("ru-RU");
@@ -496,7 +503,7 @@ function startsAsIntention(text: string) {
     .test(normalized);
   if (hasExplicitCommitment) return false;
 
-  return /^(?:я\s+)?(?:хочу|хотел(?:а)?\s+бы|планирую|собираюсь|думаю|рассматриваю|возможно|может\s+быть)(?=$|[^А-ЯЁа-яё])/i
+  return /^(?:я\s+)?(?:хочу|хотел(?:а)?\s+бы|хотелось\s+бы|планирую|собираюсь|думаю|рассматриваю|намерен(?:а)?|постараюсь|возможно|может\s+быть)(?=$|[^А-ЯЁа-яё])/i
     .test(normalized);
 }
 
@@ -622,28 +629,7 @@ export async function parseTelegramJournal(
 }
 
 export function journalPreviewThoughts(entry: TelegramJournal) {
-  const candidates = [
-    ...(entry.keyEvents ?? []),
-    ...(entry.tensions ?? []),
-    ...(entry.questions ?? [])
-  ].filter((item) => item.kind !== "AI_INTERPRETATION");
-  const seen = new Set<string>();
-
-  return candidates
-    .map((item, index) => ({
-      text: item.text.trim(),
-      index,
-      score: journalThoughtPriority(item.text, item.kind)
-    }))
-    .filter((item) => {
-      const key = item.text.toLocaleLowerCase("ru-RU");
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .sort((left, right) => right.score - left.score || left.index - right.index)
-    .map((item) => item.text)
-    .slice(0, 3);
+  return buildJournalPreviewModel(entry).importantPoints;
 }
 
 function journalThoughtPriority(text: string, kind: JournalEvidenceKind) {
@@ -651,7 +637,7 @@ function journalThoughtPriority(text: string, kind: JournalEvidenceKind) {
   const has = (pattern: RegExp) => pattern.test(normalized);
   let score = kind === "USER_INTERPRETATION" ? 80 : 20;
 
-  if (has(/(?:потому\s+что|чтобы|для\s+того|зачем|воспринима|рассматрива|как\s+(?:способ|возможность)|да[её]т\s+мне)/)) score += 60;
+  if (has(/(?:потому\s+что|чтобы|для\s+того\s+чтобы|для\s+того|зачем|мне\s+важно|мне\s+нравится[^.!?]*потому|воспринима|опыт|научиться|перед\s+тем\s+как|пригодится|возможност|как\s+способ|хочу\s+получить|цель|смысл|да[её]т\s+мне)/)) score += 60;
   if (has(/(?:после|когда|поэтому|из-за|благодаря|связыва|стало)/)) score += 50;
   if (has(/(?:стратег|траектор|приоритет|курс|сознательно|изменил|изменила|начал|начала)/)) score += 35;
   if (has(/(?:сво(?:й|его|ему|им|их)|собственн(?:ый|ого|ому|ым|ых))\s+проект|проект(?:а|у|ом|ы|ов|ам|ами|ах)?/)) score += 40;
@@ -659,4 +645,158 @@ function journalThoughtPriority(text: string, kind: JournalEvidenceKind) {
   if (has(/(?:встреч|поезд|лечу|еду|дедлайн|следующ(?:ий|ая|ее)\s+шаг)/) || /(?:^|[^0-9])\d{1,2}\s+[а-яё]+(?=$|[^а-яё])/i.test(normalized)) score += 35;
 
   return score;
+}
+
+type GroundedJournalFragment = {
+  index: number;
+  text: string;
+  tokens: Set<string>;
+  dates: Set<string>;
+};
+
+const journalStopWords = new Set([
+  "без", "был", "была", "были", "быть", "для", "его", "если", "еще", "или",
+  "как", "мне", "мой", "моя", "мои", "над", "она", "они", "оно", "после",
+  "при", "про", "так", "там", "тем", "что", "это", "этот", "эта", "эти", "меня"
+]);
+
+const journalMonthPattern = "январ(?:я|ь)|феврал(?:я|ь)|март(?:а)?|апрел(?:я|ь)|ма[йя]|июн(?:я|ь)|июл(?:я|ь)|август(?:а)?|сентябр(?:я|ь)|октябр(?:я|ь)|ноябр(?:я|ь)|декабр(?:я|ь)";
+
+function journalSemanticTokens(text: string) {
+  return new Set(
+    (text.toLocaleLowerCase("ru-RU").replace(/ё/g, "е").match(/[а-яa-z0-9]+/g) ?? [])
+      .filter((token) => (token.length >= 3 || /^\d+$/.test(token)) && !journalStopWords.has(token))
+  );
+}
+
+function journalDateKeys(text: string) {
+  const keys = new Set<string>();
+  const pattern = new RegExp(`(?:^|[^0-9])(\\d{1,2})\\s+(${journalMonthPattern})`, "gi");
+  const normalized = text.toLocaleLowerCase("ru-RU");
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(normalized)) !== null) {
+    keys.add(`${Number(match[1])}:${match[2].slice(0, 3)}`);
+  }
+  return keys;
+}
+
+function journalGroundedFragments(cleanedText: string) {
+  const sentences = cleanedText.match(/[^.!?]+(?:[.!?]+|$)/g) ?? [cleanedText];
+  return sentences
+    .map((sentence) => sentence.trim().replace(/\s+/g, " "))
+    .filter((sentence) => sentence.length >= 16)
+    .map((text, index): GroundedJournalFragment => ({
+      index,
+      text,
+      tokens: journalSemanticTokens(text),
+      dates: journalDateKeys(text)
+    }));
+}
+
+function sharedValues(left: Set<string>, right: Set<string>) {
+  let count = 0;
+  left.forEach((value) => {
+    if (right.has(value)) count += 1;
+  });
+  return count;
+}
+
+function findGroundedJournalFragment(
+  hint: string | null,
+  fragments: GroundedJournalFragment[]
+) {
+  if (!hint?.trim()) return null;
+  const hintTokens = journalSemanticTokens(hint);
+  const hintDates = journalDateKeys(hint);
+
+  const ranked = fragments.map((fragment) => {
+    const shared = sharedValues(hintTokens, fragment.tokens);
+    const shortest = Math.max(1, Math.min(hintTokens.size, fragment.tokens.size));
+    const overlap = shared / shortest;
+    const sharedDate = sharedValues(hintDates, fragment.dates) > 0;
+    return {
+      fragment,
+      shared,
+      overlap,
+      sharedDate,
+      score: overlap + shared * 0.04 + (sharedDate ? 0.5 : 0)
+    };
+  }).sort((left, right) => right.score - left.score || left.fragment.index - right.fragment.index);
+
+  const best = ranked[0];
+  if (!best) return null;
+  const grounded = best.shared >= 2 && best.overlap >= 0.28;
+  const groundedByDate = best.sharedDate && best.shared >= 2;
+  return grounded || groundedByDate ? best.fragment : null;
+}
+
+function isExplicitJournalDecision(text: string) {
+  if (startsAsIntention(text)) return false;
+  return /^(?:(?:сейчас|поэтому|пока)\s*,?\s*)?(?:я\s+)?(?:решил(?:а)?|принял(?:а)?\s+решение|выбираю|выбрал(?:а)?|буду|остаюсь|отказал(?:ся|ась)|прекращаю|начинаю)(?=$|[^А-ЯЁа-яё])/i
+    .test(text.trim());
+}
+
+function journalFragmentsDuplicate(
+  left: GroundedJournalFragment,
+  right: GroundedJournalFragment
+) {
+  if (left.index === right.index) return true;
+  const shared = sharedValues(left.tokens, right.tokens);
+  const shortest = Math.max(1, Math.min(left.tokens.size, right.tokens.size));
+  const overlap = shared / shortest;
+  const sharedDate = sharedValues(left.dates, right.dates) > 0;
+  return (shared >= 3 && overlap >= 0.6) || (sharedDate && shared >= 2);
+}
+
+export function buildJournalPreviewModel(entry: TelegramJournal): JournalPreviewModel {
+  const fragments = journalGroundedFragments(entry.cleanedText);
+  const nextStepFragment = findGroundedJournalFragment(entry.nextStep, fragments);
+  const decisionFragments: GroundedJournalFragment[] = [];
+
+  for (const decision of entry.decisions ?? []) {
+    const fragment = findGroundedJournalFragment(decision.text, fragments);
+    if (
+      !fragment
+      || !isExplicitJournalDecision(fragment.text)
+      || (nextStepFragment && journalFragmentsDuplicate(fragment, nextStepFragment))
+      || decisionFragments.some((item) => journalFragmentsDuplicate(item, fragment))
+    ) continue;
+    decisionFragments.push(fragment);
+  }
+
+  const hintKinds = new Map<number, JournalEvidenceKind>();
+  const hints = [
+    ...(entry.keyEvents ?? []),
+    ...(entry.tensions ?? []),
+    ...(entry.questions ?? [])
+  ].filter((item) => item.kind !== "AI_INTERPRETATION");
+
+  for (const hint of hints) {
+    const fragment = findGroundedJournalFragment(hint.text, fragments);
+    if (!fragment) continue;
+    const currentKind = hintKinds.get(fragment.index);
+    if (!currentKind || hint.kind === "USER_INTERPRETATION") {
+      hintKinds.set(fragment.index, hint.kind);
+    }
+  }
+
+  const importantFragments = fragments
+    .filter((fragment) => !nextStepFragment || !journalFragmentsDuplicate(fragment, nextStepFragment))
+    .filter((fragment) => !decisionFragments.some((decision) => journalFragmentsDuplicate(fragment, decision)))
+    .map((fragment) => ({
+      fragment,
+      score: journalThoughtPriority(fragment.text, hintKinds.get(fragment.index) ?? "FACT")
+    }))
+    .filter((item) => item.score >= 40)
+    .sort((left, right) => right.score - left.score || left.fragment.index - right.fragment.index)
+    .slice(0, 3)
+    .map((item) => item.fragment.text);
+
+  return {
+    summary: entry.summary,
+    domains: entry.domains,
+    importantPoints: importantFragments,
+    decisions: decisionFragments.map((fragment) => fragment.text),
+    nextStep: nextStepFragment?.text ?? null
+  };
 }

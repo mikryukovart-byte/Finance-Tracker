@@ -12,6 +12,7 @@ import {
 } from "@/lib/telegram-webhook-core";
 import type { TelegramWorkRecord } from "@/lib/telegram-work-records";
 import {
+  buildJournalPreviewModel,
   classifyTelegramInput,
   hasExplicitLifeContextIntent,
   journalMaxCompletionTokens,
@@ -580,8 +581,8 @@ test.describe("Telegram webhook core", () => {
   });
 
   test("keeps a long Journal preview dense, personal and free of third-person labels", () => {
-    const preview = journalConfirmationText(richJournalEntry);
-    const wordCount = preview.split(/\s+/).filter(Boolean).length;
+    const preview = journalConfirmationText(buildJournalPreviewModel(richJournalEntry));
+    const summaryWordCount = richJournalEntry.summary.split(/\s+/).filter(Boolean).length;
 
     expect(preview).toContain("Я уже около полугода живу в Москве");
     expect(preview).toContain("школу управления перед собственными проектами");
@@ -590,16 +591,16 @@ test.describe("Telegram webhook core", () => {
     expect(preview).not.toMatch(/\b(?:Автор|Пользователь|Субъект)\b|Ты\s*:/i);
     expect(preview).not.toContain("отношений нет из-за финансов");
     expect(preview).not.toContain("пока не закрою долги, не могу заниматься отношениями");
-    expect(wordCount).toBeGreaterThanOrEqual(120);
-    expect(wordCount).toBeLessThanOrEqual(250);
+    expect(summaryWordCount).toBeGreaterThanOrEqual(120);
+    expect(summaryWordCount).toBeLessThanOrEqual(250);
   });
 
   test("removes forbidden technical prefixes from Journal preview defensively", () => {
     const preview = journalConfirmationText({
-      ...journalEntry,
       summary: "Автор: Я работаю в найме и развиваю собственный проект.",
-      keyEvents: [{ text: "Пользователь: Я назначил встречу на 9 сентября", kind: "FACT" }],
-      tensions: [{ text: "Субъект: Я связываю стабильность с возвращением внимания к отношениям", kind: "USER_INTERPRETATION" }],
+      domains: journalEntry.domains,
+      importantPoints: ["Пользователь: Я назначил встречу на 9 сентября"],
+      decisions: ["Субъект: Я решил сохранить текущий рабочий режим"],
       nextStep: "Ты: 9 сентября я встречаюсь с партнёром"
     });
 
@@ -617,14 +618,77 @@ test.describe("Telegram webhook core", () => {
     expect(richJournalEntry.nextStep).toContain("9 сентября");
   });
 
-  test("prioritizes motivation, user causality and own-project trajectory over a simple debt fact", () => {
+  test("prioritizes grounded motivation, strategy and user causality over a simple debt fact", () => {
     const thoughts = journalPreviewThoughts(richJournalEntry);
 
     expect(thoughts).toHaveLength(3);
-    expect(thoughts[0]).toContain("школу управления перед собственными проектами");
-    expect(thoughts).toContain("После появления стабильной работы и квартиры мне стало спокойнее, и я снова начал уделять внимание отношениям");
-    expect(thoughts).toContain("У моего собственного проекта есть направление: продажи работ художников клиентам в арабских странах");
+    expect(thoughts[0]).toContain("школу управления");
+    expect(thoughts).toContain("После появления стабильной работы и квартиры мне стало спокойнее, и я снова начал ходить на свидания.");
+    expect(thoughts).toContain("Мне нравится эта работа, потому что здесь я могу получить практический управленческий опыт перед запуском собственных проектов.");
+    expect(thoughts.every((thought) => richJournalEntry.cleanedText.includes(thought))).toBe(true);
     expect(thoughts.join(" ")).not.toContain("98 000 рублей долга");
+  });
+
+  test("grounds the final Telegram preview against cleaned text for the production regression", async () => {
+    const originalFetch = global.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const originalConsoleWarn = console.warn;
+    const { source: _source, ...baseOutput } = richJournalEntry;
+    const cleanedText = `${richJournalEntry.cleanedText}\n\nЯ решил сохранить текущий рабочий режим до конца месяца.`;
+    let requestCount = 0;
+    process.env.OPENAI_API_KEY = "test-key";
+    console.warn = () => undefined;
+    global.fetch = async () => {
+      requestCount += 1;
+      return chatCompletionResponse({
+        ...baseOutput,
+        cleanedText,
+        keyEvents: [
+          {
+            text: "Пока не закрою финансовые вопросы, не могу полноценно думать о личной жизни.",
+            kind: "USER_INTERPRETATION"
+          },
+          { text: "9 сентября я полечу в Пермь обсуждать проект с Эдуардом", kind: "FACT" },
+          { text: "Мы готовим запуск онлайн-курсов", kind: "FACT" }
+        ],
+        tensions: null,
+        questions: null,
+        decisions: [
+          { text: "Я намерен расплатиться с долгами как можно скорее", kind: "USER_INTERPRETATION" },
+          { text: "Я хочу начать ходить в спортзал в сентябре", kind: "USER_INTERPRETATION" },
+          { text: "Я решил сохранить текущий рабочий режим до конца месяца", kind: "FACT" }
+        ],
+        nextStep: "Полечу в Пермь 9 сентября на встречу с Эдуардом Копысовым"
+      });
+    };
+
+    try {
+      const parsed = await parseTelegramJournal(cleanedText, "TELEGRAM_VOICE");
+      expect(parsed).not.toBeNull();
+      const finalTelegramText = journalConfirmationText(buildJournalPreviewModel(parsed!));
+      const importantSection = finalTelegramText
+        .split("Что важно:")[1]
+        ?.split(/\n\n(?:Решения|Ближайший шаг \/ событие):/)[0] ?? "";
+      const decisionsSection = finalTelegramText
+        .split("Решения:")[1]
+        ?.split("\n\nБлижайший шаг / событие:")[0] ?? "";
+      const nextStepSection = finalTelegramText.split("Ближайший шаг / событие:")[1] ?? "";
+
+      expect(requestCount).toBe(1);
+      expect(finalTelegramText).not.toContain("Пока не закрою финансовые вопросы, не могу полноценно думать о личной жизни");
+      expect(finalTelegramText).not.toMatch(/(?:Автор|Пользователь|Субъект|Ты)\s*:/i);
+      expect(importantSection).toContain("практический управленческий опыт перед запуском собственных проектов");
+      expect(importantSection).toContain("После появления стабильной работы и квартиры мне стало спокойнее");
+      expect(importantSection).not.toContain("Перм");
+      expect(decisionsSection).not.toContain("намерен расплатиться");
+      expect(decisionsSection).not.toContain("спортзал");
+      expect(decisionsSection).toContain("Я решил сохранить текущий рабочий режим до конца месяца");
+      expect(nextStepSection).toContain("9 сентября я лечу в Пермь");
+    } finally {
+      global.fetch = originalFetch;
+      process.env.OPENAI_API_KEY = originalApiKey;
+      console.warn = originalConsoleWarn;
+    }
   });
 
   test("repairs an intention locally but still retries a fatal forbidden actor label", async () => {

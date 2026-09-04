@@ -8,11 +8,12 @@ import {
   type TelegramWorkRecordSource
 } from "@/lib/telegram-work-records";
 import {
+  buildJournalPreviewModel,
   journalDomainLabels,
-  journalPreviewThoughts,
   TelegramJournalParseError,
   type TelegramInputKind,
   type TelegramJournal,
+  type JournalPreviewModel,
   type TelegramJournalSource
 } from "@/lib/journal";
 import type {
@@ -145,37 +146,35 @@ export function workRecordConfirmationText(record: TelegramWorkRecord) {
   return lines.join("\n");
 }
 
-export function journalConfirmationText(entry: TelegramJournal) {
-  const thoughts = journalPreviewThoughts(entry);
-  const decisions = entry.decisions?.map((item) => safeJournalPreviewText(item.text)).slice(0, 2) ?? [];
+export function journalConfirmationText(preview: JournalPreviewModel) {
   const lines = [
     "Дневниковая запись",
     "",
     "Суть:",
-    safeJournalPreviewText(entry.summary),
+    safeJournalPreviewText(preview.summary),
     "",
-    `Сферы: ${entry.domains.map((domain) => journalDomainLabels[domain]).join(", ")}`
+    `Сферы: ${preview.domains.map((domain) => journalDomainLabels[domain]).join(", ")}`
   ];
 
-  if (thoughts.length) {
+  if (preview.importantPoints.length) {
     lines.push(
       "",
       "Что важно:",
-      ...thoughts.map((thought) => `• ${compactPreviewText(safeJournalPreviewText(thought), 260)}`)
+      ...preview.importantPoints.map((thought) => `• ${compactPreviewText(safeJournalPreviewText(thought), 260)}`)
     );
   }
-  if (decisions.length) {
+  if (preview.decisions.length) {
     lines.push(
       "",
       "Решения:",
-      ...decisions.map((decision) => `• ${compactPreviewText(decision, 260)}`)
+      ...preview.decisions.slice(0, 2).map((decision) => `• ${compactPreviewText(safeJournalPreviewText(decision), 260)}`)
     );
   }
-  if (entry.nextStep) {
+  if (preview.nextStep) {
     lines.push(
       "",
       "Ближайший шаг / событие:",
-      compactPreviewText(safeJournalPreviewText(entry.nextStep), 420)
+      compactPreviewText(safeJournalPreviewText(preview.nextStep), 420)
     );
   }
   lines.push("", "Выбери действие:");
@@ -479,8 +478,9 @@ async function parseAndConfirm(
       await dependencies.sendMessage(chatId, unclearMessage);
       return;
     }
+    const preview = buildJournalPreviewModel(entry);
     const pendingId = await dependencies.createPendingJournal(chatId, entry);
-    await dependencies.sendMessage(chatId, journalConfirmationText(entry), {
+    await dependencies.sendMessage(chatId, journalConfirmationText(preview), {
       inline_keyboard: [
         [{ text: "Сохранить в дневник", callback_data: `journal_save:${pendingId}` }],
         [{ text: "В текущий контекст", callback_data: `journal_context:${pendingId}` }],
